@@ -1,0 +1,129 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "CHIP8-rs",
+  "projectDescription": "A CHIP-8 emulator library written in pure Rust with CLI and WebAssembly support",
+  "theme": "aspen",
+  "primaryColor": "#2182ff",
+  "lightColor": "#60a5ff",
+  "darkColor": "#1a6bd9",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/chip8-architecture",
+              "concepts/memory-layout",
+              "concepts/instruction-set",
+              "concepts/display-system",
+              "concepts/input-handling"
+            ]
+          },
+          {
+            "group": "Usage Guides",
+            "pages": [
+              "guides/using-the-library",
+              "guides/cli-usage",
+              "guides/web-integration",
+              "guides/loading-roms",
+              "guides/debug-mode"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/chip8-struct",
+              "api/initialization",
+              "api/execution",
+              "api/memory-operations",
+              "api/input-output"
+            ]
+          },
+          {
+            "group": "WebAssembly API",
+            "pages": [
+              "api/wasm-exports",
+              "api/wasm-integration"
+            ]
+          },
+          {
+            "group": "Platform Support",
+            "pages": [
+              "api/cli-platform",
+              "api/web-platform"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Advanced",
+        "groups": [
+          {
+            "group": "Implementation Details",
+            "pages": [
+              "advanced/opcode-implementation",
+              "advanced/function-tables",
+              "advanced/timers",
+              "advanced/error-handling"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/basic-usage",
+              "examples/custom-frontend",
+              "examples/rom-testing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Complete CHIP-8 instruction set with 35+ opcodes",
+    "Multi-platform support (CLI with ratatui, WebAssembly)",
+    "Configurable clock speed and debug mode",
+    "Zero external dependencies for core emulation",
+    "Full memory management with 4KB RAM and 16-level stack",
+    "Graphics rendering with 64x32 monochrome display",
+    "16-key hexadecimal keypad input system",
+    "Delay and sound timer implementation"
+  ],
+  "publicApiSurface": [
+    "Chip8::new() -> Self",
+    "Chip8::load_rom(path: PathBuf) -> Result<(), std::io::Error>",
+    "Chip8::load_rom_bytes(rom: &[u8])",
+    "Chip8::reset_and_load_bytes(rom: &[u8]) -> Result<(), Chip8Error>",
+    "Chip8::Cycle()",
+    "Chip8::play(speed: u64)",
+    "Chip8::debug()",
+    "Chip8::reset_hard()",
+    "Chip8::key_down(k: u8)",
+    "Chip8::key_up(k: u8)",
+    "Chip8::is_key_down(k: u8) -> bool",
+    "Chip8::export_video() -> &[u32; 64 * 32]",
+    "Chip8::last_opcode() -> u16",
+    "init(canvas_id: &str) -> Result<(), JsValue>",
+    "step(n: u32)",
+    "set_running(run: bool)",
+    "set_delay_ms(ms: u32)",
+    "load_rom(bytes: &[u8]) -> Result<(), JsValue>",
+    "reset()",
+    "set_key(idx: u8, down: bool)"
+  ]
+}
