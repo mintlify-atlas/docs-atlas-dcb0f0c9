@@ -14,10 +14,11 @@ Before installing CHIP8-rs, ensure you have:
 
 ## Install with cargo
 
-Add CHIP8-rs to your project using cargo:
+Since CHIP8-rs is not yet published to crates.io, add it to your project from GitHub:
 
-```bash
-cargo add chip8-rs
+```toml Cargo.toml
+[dependencies]
+chip8-rs = { git = "https://github.com/Ferryistaken/CHIP8-rs" }
 ```
 
 This installs the core library without any platform-specific dependencies.
@@ -30,8 +31,9 @@ CHIP8-rs provides optional features for different use cases. Choose the features
 
 For building terminal-based emulators with text UI:
 
-```bash
-cargo add chip8-rs --features cli
+```toml Cargo.toml
+[dependencies]
+chip8-rs = { git = "https://github.com/Ferryistaken/CHIP8-rs", features = ["cli"] }
 ```
 
 The `cli` feature includes:
@@ -43,8 +45,9 @@ The `cli` feature includes:
 
 For building browser-based emulators with WebAssembly:
 
-```bash
-cargo add chip8-rs --features web
+```toml Cargo.toml
+[dependencies]
+chip8-rs = { git = "https://github.com/Ferryistaken/CHIP8-rs", features = ["web"] }
 ```
 
 The `web` feature includes:
@@ -61,22 +64,22 @@ Alternatively, add CHIP8-rs to your `Cargo.toml` manually:
 
 ```toml Core library only
 [dependencies]
-chip8-rs = "0.1.0"
+chip8-rs = { git = "https://github.com/Ferryistaken/CHIP8-rs" }
 ```
 
 ```toml With CLI feature
 [dependencies]
-chip8-rs = { version = "0.1.0", features = ["cli"] }
+chip8-rs = { git = "https://github.com/Ferryistaken/CHIP8-rs", features = ["cli"] }
 ```
 
 ```toml With web feature
 [dependencies]
-chip8-rs = { version = "0.1.0", features = ["web"] }
+chip8-rs = { git = "https://github.com/Ferryistaken/CHIP8-rs", features = ["web"] }
 ```
 
 ```toml Multiple features
 [dependencies]
-chip8-rs = { version = "0.1.0", features = ["cli", "web"] }
+chip8-rs = { git = "https://github.com/Ferryistaken/CHIP8-rs", features = ["cli", "web"] }
 ```
 
 </CodeGroup>
