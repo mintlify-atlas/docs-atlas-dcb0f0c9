@@ -1,0 +1,300 @@
+---
+title: 'Input/Output'
+description: 'Methods for handling keyboard input and display output'
+---
+
+## Keyboard Input
+
+CHIP-8 uses a 16-key hexadecimal keypad with keys 0x0 through 0xF. The `Chip8` struct provides methods to handle key press and release events.
+
+### key_down()
+
+Registers a key press event.
+
+**Signature:** `src/chip8.rs:343-350`
+
+```rust
+pub fn key_down(&mut self, k: u8)
+```
+
+#### Parameters
+
+<ParamField path="k" type="u8" required>
+  The key index (0x0 - 0xF) that was pressed.
+</ParamField>
+
+#### Description
+
+Marks the specified key as pressed in the `keypad` array. If the key was previously not pressed, this method:
+1. Sets `keypad[k]` to 1
+2. Adds the key to the `recent_presses` queue for the FX0A (wait for key) opcode
+
+If the key is already pressed, calling this method again has no effect (prevents duplicate entries in `recent_presses`).
+
+#### Example
+
+```rust
+use chip8_rs::chip8::Chip8;
+
+let mut chip8 = Chip8::new();
+
+// Press key 0x5
+chip8.key_down(0x5);
+
+assert!(chip8.is_key_down(0x5));
+```
+
+<Note>
+Key indices are 0-15 (0x0-0xF). Passing a value outside this range will cause a panic due to array bounds checking.
+</Note>
+
+---
+
+### key_up()
+
+Registers a key release event.
+
+**Signature:** `src/chip8.rs:353-355`
+
+```rust
+pub fn key_up(&mut self, k: u8)
+```
+
+#### Parameters
+
+<ParamField path="k" type="u8" required>
+  The key index (0x0 - 0xF) that was released.
+</ParamField>
+
+#### Description
+
+Marks the specified key as released by setting `keypad[k]` to 0.
+
+#### Example
+
+```rust
+let mut chip8 = Chip8::new();
+
+chip8.key_down(0x5);
+assert!(chip8.is_key_down(0x5));
+
+chip8.key_up(0x5);
+assert!(!chip8.is_key_down(0x5));
+```
+
+---
+
+### is_key_down()
+
+Checks if a specific key is currently pressed.
+
+**Signature:** `src/chip8.rs:358-360`
+
+```rust
+pub fn is_key_down(&self, k: u8) -> bool
+```
+
+#### Parameters
+
+<ParamField path="k" type="u8" required>
+  The key index (0x0 - 0xF) to check.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="pressed" type="bool">
+  Returns `true` if the key is currently pressed, `false` otherwise.
+</ResponseField>
+
+#### Example
+
+```rust
+let mut chip8 = Chip8::new();
+
+if chip8.is_key_down(0xA) {
+    println!("Key A is pressed");
+} else {
+    println!("Key A is not pressed");
+}
+```
+
+---
+
+### take_recent_press()
+
+Retrieves and removes the next key press from the queue.
+
+**Signature:** `src/chip8.rs:363-365`
+
+```rust
+pub fn take_recent_press(&mut self) -> Option<u8>
+```
+
+#### Returns
+
+<ResponseField name="key" type="Option<u8>">
+  Returns `Some(key)` if a key press event is available in the queue, or `None` if the queue is empty.
+</ResponseField>
+
+#### Description
+
+This method is primarily used internally by the FX0A opcode ("wait for key press"). It pops the oldest key press event from the `recent_presses` queue.
+
+Key presses are only added to this queue when a key transitions from not-pressed to pressed (edge detection), not while a key is held down.
+
+#### Example
+
+```rust
+let mut chip8 = Chip8::new();
+
+// Simulate key presses
+chip8.key_down(0x1);
+chip8.key_down(0x2);
+
+// Retrieve presses in FIFO order
+assert_eq!(chip8.take_recent_press(), Some(0x1));
+assert_eq!(chip8.take_recent_press(), Some(0x2));
+assert_eq!(chip8.take_recent_press(), None);
+```
+
+---
+
+## Display Output
+
+The CHIP-8 has a 64×32 monochrome display. The `video` field is a public array that can be read directly, but the API also provides methods for accessing and rendering the display.
+
+### export_video()
+
+Returns a reference to the video buffer.
+
+**Signature:** `src/chip8.rs:277-279`
+
+```rust
+pub fn export_video(&mut self) -> &[u32; 64 * 32]
+```
+
+#### Returns
+
+<ResponseField name="video" type="&[u32; 64 * 32]">
+  A reference to the 2048-element video buffer array.
+</ResponseField>
+
+#### Description
+
+Returns a reference to the internal `video` array. Each element represents a single pixel:
+- `0x00000000` (0) = pixel off (black)
+- `0xFFFFFFFF` = pixel on (white)
+
+The buffer is laid out in row-major order: the first 64 elements are the top row, the next 64 are the second row, etc.
+
+#### Example
+
+```rust
+use chip8_rs::chip8::Chip8;
+
+let mut chip8 = Chip8::new();
+let video = chip8.export_video();
+
+// Check if pixel at (10, 5) is on
+let pixel_index = 5 * 64 + 10;
+if video[pixel_index] == 0xFFFFFFFF {
+    println!("Pixel is on");
+}
+```
+
+<Note>
+Since `video` is a public field, you can also access it directly: `chip8.video[index]`
+</Note>
+
+---
+
+### pretty_print_video()
+
+Prints the current display state to the terminal.
+
+**Signature:** `src/chip8.rs:281-304`
+
+```rust
+pub fn pretty_print_video(&mut self)
+```
+
+#### Description
+
+Renders the 64×32 video buffer to the terminal using ANSI escape codes and Unicode block characters. This method:
+1. Clears the terminal screen using ANSI escape sequence `\x1B[2J\x1B[1;1H`
+2. Converts the video buffer into rows of 64 pixels each
+3. Prints each row using:
+   - `█` (full block) for pixels with value `0xFFFFFFFF` (on)
+   - ` ` (space) for pixels with value `0x00000000` (off)
+
+#### Example
+
+```rust
+use chip8_rs::chip8::Chip8;
+use std::path::PathBuf;
+use std::{thread, time};
+
+let mut chip8 = Chip8::new();
+chip8.load_rom(PathBuf::from("test.ch8")).unwrap();
+
+loop {
+    chip8.Cycle();
+    chip8.pretty_print_video();
+    thread::sleep(time::Duration::from_millis(16)); // ~60 FPS
+}
+```
+
+#### Terminal Requirements
+
+- **ANSI support**: Terminal must support ANSI escape codes
+- **Unicode support**: Terminal must support Unicode (specifically U+2588 FULL BLOCK)
+- **Size**: Recommended minimum 64 columns × 32 rows
+
+<Warning>
+This method clears the entire terminal screen on each call. It's designed for simple CLI rendering and may flicker. For production applications, consider implementing a custom renderer using `export_video()` or accessing the `video` field directly.
+</Warning>
+
+---
+
+## Keypad Layout
+
+The CHIP-8 keypad is typically mapped to modern keyboards as follows:
+
+```
+CHIP-8 Keypad:        Keyboard Mapping:
+┌─┬─┬─┬─┐            ┌─┬─┬─┬─┐
+│1│2│3│C│            │1│2│3│4│
+├─┼─┼─┼─┤            ├─┼─┼─┼─┤
+│4│5│6│D│            │Q│W│E│R│
+├─┼─┼─┼─┤            ├─┼─┼─┼─┤
+│7│8│9│E│            │A│S│D│F│
+├─┼─┼─┼─┤            ├─┼─┼─┼─┤
+│A│0│B│F│            │Z│X│C│V│
+└─┴─┴─┴─┘            └─┴─┴─┴─┘
+```
+
+When implementing keyboard handlers, you'll need to map physical keyboard keys to CHIP-8 key indices (0x0-0xF).
+
+### Example: Keyboard Handler
+
+```rust
+use chip8_rs::chip8::Chip8;
+
+fn handle_key_event(chip8: &mut Chip8, key_char: char, pressed: bool) {
+    let key_index = match key_char {
+        '1' => Some(0x1), '2' => Some(0x2), '3' => Some(0x3), '4' => Some(0xC),
+        'q' => Some(0x4), 'w' => Some(0x5), 'e' => Some(0x6), 'r' => Some(0xD),
+        'a' => Some(0x7), 's' => Some(0x8), 'd' => Some(0x9), 'f' => Some(0xE),
+        'z' => Some(0xA), 'x' => Some(0x0), 'c' => Some(0xB), 'v' => Some(0xF),
+        _ => None,
+    };
+
+    if let Some(key) = key_index {
+        if pressed {
+            chip8.key_down(key);
+        } else {
+            chip8.key_up(key);
+        }
+    }
+}
+```

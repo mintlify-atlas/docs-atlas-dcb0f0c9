@@ -1,0 +1,102 @@
+---
+title: Introduction
+description: A CHIP-8 emulator library written in pure Rust for building retro computing experiences
+---
+
+# Introduction
+
+CHIP8-rs is a CHIP-8 emulator library written in pure Rust, designed to be easy to understand and integrate into your projects. Whether you're building a CLI emulator, a web-based retro gaming platform, or learning about emulator development, CHIP8-rs provides a clean, well-documented foundation.
+
+## What is CHIP-8?
+
+CHIP-8 is an interpreted programming language developed in the 1970s for early microcomputers. It was designed to make game programming easier by providing a simple virtual machine that could run on different hardware. Today, CHIP-8 is a popular choice for learning emulator development due to its simplicity and well-documented specification.
+
+## What does CHIP8-rs do?
+
+CHIP8-rs provides a complete CHIP-8 virtual machine implementation with:
+
+- Full instruction set support (35 opcodes)
+- Memory management (4KB RAM)
+- Display rendering (64x32 monochrome)
+- Keyboard input handling (16-key hexadecimal keypad)
+- Timers (delay and sound)
+- Stack operations for subroutines
+
+<CardGroup cols={2}>
+  <Card title="Easy to understand" icon="book-open">
+    Written with clarity in mind, making it perfect for learning how emulators work under the hood
+  </Card>
+  
+  <Card title="Pure Rust" icon="code">
+    No unsafe code, leveraging Rust's safety guarantees for reliable emulation
+  </Card>
+  
+  <Card title="Multiple platforms" icon="window-restore">
+    Build CLI applications with the `cli` feature or run in browsers with the `web` feature
+  </Card>
+  
+  <Card title="Embeddable" icon="puzzle-piece">
+    Use as a library in your own projects with a simple, intuitive API
+  </Card>
+</CardGroup>
+
+## Key features
+
+### Accurate emulation
+
+CHIP8-rs implements the complete CHIP-8 specification, including all 35 opcodes with proper behavior:
+
+- Arithmetic and logic operations
+- Graphics rendering with collision detection
+- Flow control (jumps, calls, returns)
+- Timers and sound
+- Keyboard input
+
+### Flexible architecture
+
+The library is designed to be platform-agnostic, with optional features for different use cases:
+
+- **Core library**: Just the emulator logic, bring your own rendering and input
+- **CLI feature**: Terminal-based interface using ratatui and crossterm
+- **Web feature**: WebAssembly support for browser-based emulators
+
+### Developer-friendly API
+
+The API is straightforward and well-documented:
+
+```rust
+use chip8_rs::chip8::Chip8;
+use std::path::PathBuf;
+
+// Create a new emulator instance
+let mut chip8 = Chip8::new();
+
+// Load a ROM
+let rom_path = PathBuf::from("roms/pong.ch8");
+chip8.load_rom(rom_path)?;
+
+// Run the emulation loop
+loop {
+    chip8.Cycle();
+    // Render the display, handle input, etc.
+}
+```
+
+## Use cases
+
+- **Learning**: Understand how emulators work by studying clean, readable code
+- **Retro gaming**: Build your own CHIP-8 game player
+- **Web projects**: Create browser-based retro gaming experiences
+- **Education**: Teach computer architecture and emulation concepts
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Add CHIP8-rs to your Rust project
+  </Card>
+  
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Build your first CHIP-8 emulator in minutes
+  </Card>
+</CardGroup>

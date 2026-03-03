@@ -1,0 +1,181 @@
+---
+title: 'Memory Layout'
+description: 'Understanding the 4KB memory organization in CHIP-8'
+---
+
+## Overview
+
+The CHIP-8 has 4KB (4,096 bytes) of RAM, addressed from `0x000` to `0xFFF`. This memory space contains the interpreter, fonts, program code, and runtime data.
+
+## Memory Structure
+
+```rust
+memory: [u8; 4096]
+```
+
+The memory is organized as follows:
+
+<Steps>
+  <Step title="Reserved Area (0x000 - 0x1FF)">
+    Originally reserved for the CHIP-8 interpreter. Modern emulators use this space for fonts and internal data.
+  </Step>
+  <Step title="Fontset (0x050 - 0x0A0)">
+    Built-in hexadecimal font sprites (0-F). Each character is 5 bytes tall.
+  </Step>
+  <Step title="Program ROM (0x200 - 0xFFF)">
+    Programs are loaded starting at address 512 (0x200). This is where the program counter begins.
+  </Step>
+</Steps>
+
+## Memory Map
+
+| Address Range | Size | Contents |
+|--------------|------|----------|
+| `0x000-0x04F` | 80 bytes | Reserved (interpreter area) |
+| `0x050-0x09F` | 80 bytes | **Fontset data** |
+| `0x0A0-0x1FF` | 352 bytes | Reserved / Free space |
+| `0x200-0xFFF` | 3,584 bytes | **Program and variables** |
+
+## Fontset Storage
+
+The built-in font is loaded into memory at address `0x50` during initialization (`src/chip8.rs:307-340`):
+
+```rust
+fn load_fonts(&mut self) {
+    let fontset: [u8; 80] = [
+        0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+        0x20, 0x60, 0x20, 0x20, 0x70, // 1
+        0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+        0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+        0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+        0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+        0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+        0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+        0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+        0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+        0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+        0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+        0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+        0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+        0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+        0xF0, 0x80, 0xF0, 0x80, 0x80, // F
+    ];
+
+    let fontset_start_address = 0x50;
+    
+    for i in 0..fontset.len() {
+        self.memory[fontset_start_address + i] = fontset[i];
+    }
+}
+```
+
+<Info>
+Each font character is 5 bytes tall and 8 pixels wide. The font data represents the pixel patterns for hexadecimal digits 0-F.
+</Info>
+
+## Program Loading
+
+Programs (ROMs) are loaded into memory starting at address `0x200` (`src/chip8.rs:249-265`):
+
+```rust
+pub fn load_rom(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
+    let bytes = std::fs::read(path)?;
+    self.reset_and_load_bytes(&bytes)
+        .map_err(|_| std::io::ErrorKind::InvalidData.into())
+}
+
+pub fn load_rom_bytes(&mut self, rom: &[u8]) {
+    const START: usize = 0x200;
+    
+    let mem_len = self.memory.len();
+    if START >= mem_len {
+        return;
+    }
+    
+    let copy_len = rom.len().min(mem_len - START);
+    self.memory[START..START + copy_len].copy_from_slice(&rom[..copy_len]);
+}
+```
+
+<Warning>
+Programs larger than 3,584 bytes will be truncated. The maximum usable program size is `0xFFF - 0x200 = 3,584 bytes`.
+</Warning>
+
+## Stack vs Memory
+
+Importantly, the CHIP-8's stack is **separate** from main memory:
+
+```rust
+stack: [u16; 16],
+stack_pointer: u8,
+```
+
+The stack:
+- Stores 16-bit return addresses (not 8-bit values)
+- Has a maximum depth of 16 levels
+- Is not part of the main 4KB memory array
+- Used exclusively for subroutine calls (`CALL` and `RET` instructions)
+
+## Memory Access Patterns
+
+### Reading Instructions
+
+The program counter points to the current instruction. Since CHIP-8 uses big-endian 16-bit opcodes:
+
+```rust
+// Fetch 2-byte opcode at program counter
+self.op_code = ((self.memory[self.program_counter as usize] as u16) << 8)
+              | self.memory[(self.program_counter + 1) as usize] as u16;
+```
+
+### Font Sprite Location
+
+The `FX29` instruction sets the index register to a font character's location:
+
+```rust
+// OP_Fx29 from src/chip8.rs:898-908
+fn OP_Fx29(&mut self) {
+    let Vx = (self.op_code & 0x0F00) >> 8;
+    let digit = self.registers[Vx as usize];
+    let fontset_start_address = 0x50;
+    
+    // Each font character is 5 bytes
+    self.index_register = (fontset_start_address + (5 * digit)) as u16;
+}
+```
+
+### Memory Dump
+
+You can inspect memory contents using the `dump_rom` method:
+
+```rust
+pub fn dump_rom(&self, start_address: usize, byte_number: usize) -> Vec<u8> {
+    let mut rom: Vec<u8> = Vec::new();
+    for i in start_address..start_address + byte_number {
+        rom.push(self.memory[i]);
+    }
+    rom
+}
+```
+
+## Endianness
+
+<Note>
+CHIP-8 uses **big-endian** byte order. When reading a 16-bit opcode from memory, the first byte is the high byte and the second byte is the low byte.
+
+Example: Memory bytes `[0x61, 0x23]` → Opcode `0x6123`
+</Note>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="microchip" href="/concepts/chip8-architecture">
+    See how memory fits into the overall architecture
+  </Card>
+  <Card title="Instruction Set" icon="code" href="/concepts/instruction-set">
+    Learn how instructions access memory
+  </Card>
+  <Card title="Display System" icon="display" href="/concepts/display-system">
+    Understand sprite storage and rendering
+  </Card>
+</CardGroup>

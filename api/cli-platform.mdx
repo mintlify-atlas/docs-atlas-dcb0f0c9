@@ -1,0 +1,299 @@
+---
+title: CLI Platform API
+description: Platform-specific APIs for the terminal-based CLI interface
+---
+
+The CLI platform provides a terminal-based user interface using [Ratatui](https://ratatui.rs/) for rendering and [Crossterm](https://github.com/crossterm-rs/crossterm) for input handling.
+
+## Feature Flag
+
+The CLI platform is available when the `cli` feature is enabled:
+
+```toml
+[features]
+cli = ["dep:ratatui", "dep:crossterm", "dep:structopt"]
+```
+
+<Note>
+The CLI platform is only available on non-WASM targets. All CLI code is gated with `#![cfg(all(feature = "cli", not(target_arch = "wasm32")))]`.
+</Note>
+
+## Chip8Screen Widget
+
+A Ratatui widget that renders the CHIP-8 64x32 framebuffer to the terminal.
+
+### Definition
+
+```rust
+pub struct Chip8Screen<'a> {
+    pub video: &'a [u32; 64 * 32], // nonzero = ON
+    pub on: Color,
+    pub off: Color,
+}
+```
+
+### Fields
+
+- **video**: Reference to the CHIP-8 video buffer (64x32 pixels)
+- **on**: Color for pixels that are ON (nonzero)
+- **off**: Color for pixels that are OFF (zero)
+
+### Usage Example
+
+From `src/bin/cli.rs:91-93`:
+
+```rust
+f.render_widget(
+    Chip8Screen { video: &video, on: Color::White, off: Color::Black },
+    area,
+);
+```
+
+### Rendering Algorithm
+
+The widget scales the 64x32 CHIP-8 display to fit the terminal area by mapping terminal cells to framebuffer pixels:
+
+```rust
+for ty in 0..area.height {
+    let sy = (ty as u32 * 32) / area.height as u32; // 0..31
+    for tx in 0..area.width {
+        let sx = (tx as u32 * 64) / area.width as u32; // 0..63
+        let idx = (sy * 64 + sx) as usize;
+        let on = self.video[idx] != 0;
+        
+        let cell = &mut buf[(area.x + tx, area.y + ty)];
+        cell.set_symbol(" ");
+        cell.set_style(Style::default().bg(if on { self.on } else { self.off }));
+    }
+}
+```
+
+## Input Functions
+
+### map_pc_to_chip8()
+
+Maps PC keyboard keys to CHIP-8 hexadecimal keypad (0x0-0xF).
+
+```rust
+pub fn map_pc_to_chip8(code: KeyCode) -> Option<u8>
+```
+
+#### Keyboard Layout
+
+The PC keyboard is mapped to the CHIP-8 keypad as follows:
+
+```
+CHIP-8 Keypad:        PC Keyboard:
++-+-+-+-+            +-+-+-+-+
+|1|2|3|C|            |1|2|3|4|
++-+-+-+-+            +-+-+-+-+
+|4|5|6|D|            |Q|W|E|R|
++-+-+-+-+     =>     +-+-+-+-+
+|7|8|9|E|            |A|S|D|F|
++-+-+-+-+            +-+-+-+-+
+|A|0|B|F|            |Z|X|C|V|
++-+-+-+-+            +-+-+-+-+
+```
+
+#### Example
+
+```rust
+use ratatui::crossterm::event::KeyCode;
+
+let chip8_key = map_pc_to_chip8(KeyCode::Char('w'));
+assert_eq!(chip8_key, Some(0x5));
+
+let chip8_key = map_pc_to_chip8(KeyCode::Char('x'));
+assert_eq!(chip8_key, Some(0x0));
+```
+
+### pump_input()
+
+Polls and processes all pending input events, updating the CHIP-8 keypad state.
+
+```rust
+pub fn pump_input(
+    chip8: &mut Chip8,
+    frame_keys: &mut [u8; 16],
+    logs: &mut LogBuf,
+) -> Result<bool, Box<dyn std::error::Error>>
+```
+
+#### Parameters
+
+- **chip8**: Mutable reference to the CHIP-8 instance
+- **frame_keys**: Array tracking which keys are currently pressed (1 = down, 0 = up)
+- **logs**: Log buffer for recording input events
+
+#### Returns
+
+- `Ok(true)` if the user requested to quit (Esc or Q)
+- `Ok(false)` if execution should continue
+- `Err` if an I/O error occurred
+
+#### Usage Example
+
+From `src/bin/cli.rs:75-79`:
+
+```rust
+let mut frame_keys = [0u8; 16];
+if pump_input(&mut chip8, &mut frame_keys, &mut logs)? {
+    return Ok(()); // User quit
+}
+chip8.keypad = frame_keys;
+```
+
+#### Behavior
+
+- Polls all available events without blocking
+- Detects key press, repeat, and release events
+- Special handling for Esc and Q keys to quit the emulator
+- Logs key events and terminal resize events
+- Calls `chip8.key_down()` on initial key press (not repeats)
+
+## Layout Utilities
+
+### fit_chip8_top_left()
+
+Calculates a rectangle that fits the CHIP-8 display (64x32, 2:1 aspect ratio) within a given area, anchored to the top-left.
+
+```rust
+pub fn fit_chip8_top_left(area: Rect) -> Rect
+```
+
+#### Algorithm
+
+```rust
+let aspect_w = 64.0f32;
+let aspect_h = 32.0f32; // 2:1
+let want = aspect_w / aspect_h;
+
+let aw = area.width.max(1) as f32;
+let ah = area.height.max(1) as f32;
+
+// Try max width, then adjust height; if too tall, clamp by height
+let mut w = aw;
+let mut h = (aw / want).floor();
+if h > ah {
+    h = ah;
+    w = (ah * want).floor();
+}
+```
+
+#### Usage Example
+
+From `src/bin/cli.rs:122-126`:
+
+```rust
+let screen_rect = fit_chip8_top_left(screen_host);
+f.render_widget(
+    Chip8Screen { video: &video, on: Color::White, off: Color::Black },
+    screen_rect,
+);
+```
+
+## LogBuf
+
+A circular buffer for storing log messages with automatic truncation.
+
+### Definition
+
+```rust
+pub struct LogBuf {
+    lines: VecDeque<String>,
+    cap: usize,
+}
+```
+
+### Methods
+
+#### new()
+
+Creates a new log buffer with the specified capacity.
+
+```rust
+pub fn new(cap: usize) -> Self
+```
+
+#### push()
+
+Adds a log message to the buffer. If the buffer is at capacity, the oldest message is removed.
+
+```rust
+pub fn push<T: Into<String>>(&mut self, s: T)
+```
+
+#### to_paragraph()
+
+Converts the log buffer into a Ratatui `Paragraph` widget for rendering.
+
+```rust
+pub fn to_paragraph(&self, title: &'static str) -> Paragraph<'static>
+```
+
+### Usage Example
+
+From `src/bin/cli.rs:68,128-129`:
+
+```rust
+let mut logs = LogBuf::new(200);
+
+// Later, in the render loop:
+let log_para = logs.to_paragraph("logs");
+f.render_widget(log_para, log_host);
+```
+
+## CLI Binary
+
+The CLI binary is available at `src/bin/cli.rs` and requires the `cli` feature:
+
+```toml
+[[bin]]
+name = "cli"
+path = "src/bin/cli.rs"
+required-features = ["cli"]
+```
+
+### Command-Line Options
+
+```bash
+chip8-rs --rom <ROM_PATH> [--debug] [--clock <MILLISECONDS>]
+```
+
+- **--rom, -r**: Path to the ROM file (required)
+- **--debug, -d**: Enable debug mode with logs and status bar
+- **--clock, -c**: Milliseconds per cycle (default: 10)
+
+### Debug Mode
+
+When `--debug` is enabled, the terminal displays:
+
+- Left: CHIP-8 screen (aspect-ratio preserved)
+- Right: Scrolling log panel
+- Bottom: Status bar showing current opcode and speed
+
+Without debug mode, the CHIP-8 screen fills the entire terminal.
+
+## Platform Dependencies
+
+The CLI platform depends on:
+
+```toml
+[dependencies.ratatui]
+version = "0.29"
+optional = true
+
+[dependencies.structopt]
+version = "0.3.26"
+optional = true
+
+[dependencies.crossterm]
+version = "0.28"
+optional = true
+```
+
+## See Also
+
+- [Web Platform API](/api/web-platform) - WebAssembly platform implementation
+- [Core API](/api/core) - Core CHIP-8 emulator
+- [Chip8 Struct](/api/chip8-struct) - Main emulator state

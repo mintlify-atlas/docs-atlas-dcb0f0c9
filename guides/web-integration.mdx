@@ -1,0 +1,492 @@
+---
+title: Web Integration
+description: Running CHIP8-rs in the browser with WebAssembly
+---
+
+CHIP8-rs can be compiled to WebAssembly and run directly in the browser, providing a full-featured emulator with no installation required.
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install wasm-pack">
+    ```bash
+    cargo install wasm-pack
+    ```
+  </Step>
+  
+  <Step title="Add the web feature to Cargo.toml">
+    The `web` feature enables WASM support and includes necessary dependencies:
+    
+    ```toml Cargo.toml
+    [features]
+    web = ["dep:wasm-bindgen", "dep:web-sys", "dep:js-sys", "dep:console_error_panic_hook"]
+    ```
+    
+    This is already configured in CHIP8-rs.
+  </Step>
+</Steps>
+
+## Building for WASM
+
+Compile the project to WebAssembly:
+
+```bash
+wasm-pack build --target web --features web
+```
+
+This generates a `pkg/` directory containing:
+- `chip8_rs.js` - JavaScript bindings
+- `chip8_rs_bg.wasm` - WebAssembly binary
+- `chip8_rs.d.ts` - TypeScript definitions
+
+## JavaScript API Reference
+
+The WASM build exports the following functions:
+
+### Initialization
+
+<ParamField path="init" type="function">
+  Initialize the WASM module
+  
+  ```javascript
+  import init from './pkg/chip8_rs.js';
+  await init();
+  ```
+</ParamField>
+
+<ParamField path="init(canvas_id)" type="function">
+  Initialize the emulator with a specific canvas element
+  
+  ```javascript
+  import { init as wasmInit } from './pkg/chip8_rs.js';
+  await wasmInit('screen'); // ID of your canvas element
+  ```
+  
+  **Parameters:**
+  - `canvas_id` (string): The HTML ID of the canvas element to render to
+  
+  **Returns:** `Promise<void>`
+</ParamField>
+
+### ROM Management
+
+<ParamField path="load_rom" type="function">
+  Load a ROM from a byte array
+  
+  ```javascript
+  import { load_rom } from './pkg/chip8_rs.js';
+  
+  const response = await fetch('roms/pong.ch8');
+  const romData = new Uint8Array(await response.arrayBuffer());
+  await load_rom(romData);
+  ```
+  
+  **Parameters:**
+  - `bytes` (Uint8Array): The ROM file contents
+  
+  **Returns:** `Promise<void>` or throws error if ROM is invalid
+</ParamField>
+
+<ParamField path="reset" type="function">
+  Reset the emulator to initial state
+  
+  ```javascript
+  import { reset } from './pkg/chip8_rs.js';
+  reset();
+  ```
+  
+  This clears all memory, resets registers, and stops execution.
+</ParamField>
+
+### Execution Control
+
+<ParamField path="set_running" type="function">
+  Start or pause emulation
+  
+  ```javascript
+  import { set_running } from './pkg/chip8_rs.js';
+  
+  set_running(true);  // Start running
+  set_running(false); // Pause
+  ```
+  
+  **Parameters:**
+  - `run` (boolean): `true` to run continuously, `false` to pause
+</ParamField>
+
+<ParamField path="step" type="function">
+  Execute a specific number of instructions
+  
+  ```javascript
+  import { step } from './pkg/chip8_rs.js';
+  
+  step(1);   // Execute one instruction
+  step(10);  // Execute 10 instructions
+  step(100); // Execute 100 instructions
+  ```
+  
+  **Parameters:**
+  - `n` (number): Number of instructions to execute
+  
+  Useful for debugging or frame-stepping through ROMs.
+</ParamField>
+
+<ParamField path="set_delay_ms" type="function">
+  Set the delay between instruction cycles
+  
+  ```javascript
+  import { set_delay_ms } from './pkg/chip8_rs.js';
+  
+  set_delay_ms(12);  // Default: ~83 Hz
+  set_delay_ms(5);   // Faster: ~200 Hz
+  set_delay_ms(20);  // Slower: ~50 Hz
+  ```
+  
+  **Parameters:**
+  - `ms` (number): Milliseconds between cycles (minimum: 1)
+</ParamField>
+
+### Input Handling
+
+<ParamField path="set_key" type="function">
+  Set a key as pressed or released
+  
+  ```javascript
+  import { set_key } from './pkg/chip8_rs.js';
+  
+  set_key(0x5, true);  // Press key 0x5
+  set_key(0x5, false); // Release key 0x5
+  ```
+  
+  **Parameters:**
+  - `idx` (number): Key index (0-15 for CHIP-8's 16-key keypad)
+  - `down` (boolean): `true` for pressed, `false` for released
+</ParamField>
+
+## HTML Integration
+
+### Basic Setup
+
+Create an HTML file that loads the WASM module:
+
+```html index.html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CHIP-8 Emulator</title>
+</head>
+<body>
+  <canvas id="screen" width="640" height="320"></canvas>
+  
+  <div>
+    <button id="run">Run</button>
+    <button id="pause">Pause</button>
+    <button id="step">Step</button>
+    <button id="reset">Reset</button>
+  </div>
+  
+  <input type="file" id="rom-file" accept=".ch8,.rom">
+  
+  <script type="module">
+    import init, { 
+      init as wasmInit,
+      load_rom,
+      reset,
+      set_running,
+      step,
+      set_key
+    } from './pkg/chip8_rs.js';
+    
+    // Initialize WASM
+    await init();
+    await wasmInit('screen');
+    
+    // Load ROM from file input
+    document.getElementById('rom-file').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      const buffer = await file.arrayBuffer();
+      await load_rom(new Uint8Array(buffer));
+    });
+    
+    // Controls
+    document.getElementById('run').onclick = () => set_running(true);
+    document.getElementById('pause').onclick = () => set_running(false);
+    document.getElementById('step').onclick = () => step(1);
+    document.getElementById('reset').onclick = () => reset();
+  </script>
+</body>
+</html>
+```
+
+### Keyboard Input
+
+Map keyboard events to CHIP-8 keys:
+
+```javascript
+const keyMap = {
+  'Digit1': 0x1, 'Digit2': 0x2, 'Digit3': 0x3, 'Digit4': 0xC,
+  'KeyQ': 0x4, 'KeyW': 0x5, 'KeyE': 0x6, 'KeyR': 0xD,
+  'KeyA': 0x7, 'KeyS': 0x8, 'KeyD': 0x9, 'KeyF': 0xE,
+  'KeyZ': 0xA, 'KeyX': 0x0, 'KeyC': 0xB, 'KeyV': 0xF,
+};
+
+window.addEventListener('keydown', (e) => {
+  const key = keyMap[e.code];
+  if (key !== undefined) {
+    e.preventDefault();
+    set_key(key, true);
+  }
+});
+
+window.addEventListener('keyup', (e) => {
+  const key = keyMap[e.code];
+  if (key !== undefined) {
+    e.preventDefault();
+    set_key(key, false);
+  }
+});
+```
+
+### Loading ROMs from URL
+
+```javascript
+async function loadRomFromUrl(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  
+  const buffer = await response.arrayBuffer();
+  await load_rom(new Uint8Array(buffer));
+}
+
+// Usage
+await loadRomFromUrl('./roms/pong.ch8');
+```
+
+## Complete Example
+
+The CHIP8-rs repository includes a full web implementation in `index.html`. Key features:
+
+<Steps>
+  <Step title="Canvas Setup">
+    640×320 canvas with 2:1 aspect ratio for the 64×32 CHIP-8 display
+    
+    ```html
+    <canvas id="screen" width="640" height="320"></canvas>
+    ```
+  </Step>
+  
+  <Step title="Automatic Rendering">
+    The WASM module automatically renders to the canvas using `requestAnimationFrame` internally
+    
+    ```javascript
+    // After init, rendering happens automatically
+    await wasmInit('screen');
+    ```
+  </Step>
+  
+  <Step title="Control Buttons">
+    Run/Pause, Step, and Speed controls
+    
+    ```html
+    <button id="run">Run</button>
+    <button id="pause">Pause</button>
+    <button id="step-1">Step 1</button>
+    <button id="step-10">Step 10</button>
+    ```
+  </Step>
+  
+  <Step title="ROM Loading">
+    Multiple options: file upload, URL input, preset selector
+    
+    ```html
+    <input type="file" accept=".ch8,.rom">
+    <input type="text" placeholder="ROM URL">
+    <select id="presets">...</select>
+    ```
+  </Step>
+  
+  <Step title="On-Screen Keypad">
+    Visual 4×4 keypad for mobile/touch devices
+    
+    ```javascript
+    // Each key div has pointerdown/pointerup handlers
+    div.addEventListener('pointerdown', () => set_key(idx, true));
+    div.addEventListener('pointerup', () => set_key(idx, false));
+    ```
+  </Step>
+</Steps>
+
+## Rendering Details
+
+The WASM implementation handles rendering internally:
+
+- **Pixel scaling:** 64×32 CHIP-8 pixels scale to canvas size
+- **Color scheme:** `#2182ff` for ON pixels, `#000` for OFF
+- **Refresh rate:** Tied to instruction execution via `setTimeout` loop
+- **No flickering:** Uses proper canvas buffering
+
+```javascript
+// From platform_web.rs - automatically called after each instruction
+fn present(&self) {
+    let w = self.canvas.width() as f64;
+    let h = self.canvas.height() as f64;
+    let pw = (w / 64.0).floor();
+    let ph = (h / 32.0).floor();
+    
+    // Clear and render pixels
+    self.ctx.set_fill_style(&"#000".into());
+    self.ctx.fill_rect(0.0, 0.0, w, h);
+    
+    for y in 0..32 {
+        for x in 0..64 {
+            if self.chip8.video[y * 64 + x] != 0 {
+                self.ctx.fill_rect(x * pw, y * ph, pw, ph);
+            }
+        }
+    }
+}
+```
+
+## Deployment
+
+<Tabs>
+  <Tab title="Local Server">
+    For development, use a local HTTP server:
+    
+    ```bash
+    # Python 3
+    python -m http.server 8000
+    
+    # Node.js
+    npx serve .
+    
+    # Rust
+    cargo install simple-http-server
+    simple-http-server -p 8000
+    ```
+    
+    Then open `http://localhost:8000` in your browser.
+  </Tab>
+  
+  <Tab title="Static Hosting">
+    Deploy the following files to any static host:
+    
+    ```
+    index.html
+    pkg/
+      chip8_rs.js
+      chip8_rs_bg.wasm
+    roms/
+      (your .ch8 files)
+    ```
+    
+    Platforms: GitHub Pages, Netlify, Vercel, Cloudflare Pages, etc.
+  </Tab>
+  
+  <Tab title="CORS Considerations">
+    If loading ROMs from external URLs, ensure CORS headers allow it:
+    
+    ```javascript
+    try {
+      await loadRomFromUrl('https://example.com/rom.ch8');
+    } catch (e) {
+      console.error('CORS error - ROM must allow cross-origin access');
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Performance Tips
+
+<AccordionGroup>
+  <Accordion title="Adjust instruction delay for smooth rendering">
+    ```javascript
+    set_delay_ms(12); // Default: ~83 Hz
+    
+    // For 60 FPS-style smoothness:
+    set_delay_ms(16); // ~62 Hz
+    
+    // For faster execution:
+    set_delay_ms(5);  // ~200 Hz
+    ```
+  </Accordion>
+  
+  <Accordion title="Use requestAnimationFrame for custom rendering">
+    The built-in renderer works well, but for custom needs, you can access the video buffer:
+    
+    ```rust
+    // In your WASM code
+    #[wasm_bindgen]
+    pub fn get_video_buffer() -> Vec<u32> {
+        EMU.with(|cell| cell.borrow().chip8.video.to_vec())
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Debounce control buttons">
+    The reference implementation includes debouncing to prevent accidental double-clicks:
+    
+    ```javascript
+    const debounce = (fn, ms = 120) => {
+      let t = 0;
+      return (...args) => {
+        const now = performance.now();
+        if (now - t < ms) return;
+        t = now;
+        fn(...args);
+      };
+    };
+    
+    runBtn.onclick = debounce(() => set_running(true));
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<Warning>
+**"Failed to fetch WASM"**
+
+Make sure you're accessing via HTTP(S), not `file://`. WASM requires a web server.
+</Warning>
+
+<Warning>
+**"Module not found"**
+
+Verify the import path matches your `pkg/` directory location:
+
+```javascript
+import init from './pkg/chip8_rs.js'; // Correct
+import init from 'chip8_rs.js';        // Wrong
+```
+</Warning>
+
+<Warning>
+**Keys not working**
+
+Ensure `preventDefault()` is called in keyboard event handlers to prevent browser shortcuts:
+
+```javascript
+window.addEventListener('keydown', (e) => {
+  const key = keyMap[e.code];
+  if (key !== undefined) {
+    e.preventDefault(); // Important!
+    set_key(key, true);
+  }
+});
+```
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Loading ROMs" icon="file" href="/guides/loading-roms">
+    Different methods to load ROM data
+  </Card>
+  <Card title="Using the Library" icon="code" href="/guides/using-the-library">
+    Core Rust library usage
+  </Card>
+</CardGroup>

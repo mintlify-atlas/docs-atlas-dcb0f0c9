@@ -1,0 +1,270 @@
+---
+title: 'Opcode Implementation'
+description: 'Deep dive into how CHIP-8 opcodes are implemented in Rust'
+---
+
+## Overview
+
+The CHIP-8 emulator implements all 35 opcodes as individual methods on the `Chip8` struct. Each opcode is decoded from a 16-bit instruction and executes a specific operation on the emulator's state.
+
+## Opcode Structure
+
+CHIP-8 opcodes are 16-bit instructions stored in big-endian format in memory:
+
+```rust
+// Fetch opcode (chip8.rs:1009)
+self.op_code = ((self.memory[self.program_counter as usize] as u16)
+    .checked_shl(8)
+    .unwrap_or(0)) | self.memory[(self.program_counter + 1) as usize] as u16;
+```
+
+<Note>
+The emulator uses big-endian byte order: `0x00 0xE0` in memory becomes `0x00E0` as an opcode.
+</Note>
+
+## Decoding Pattern
+
+Opcodes are decoded using bitwise operations and masks:
+
+- `0xF000` - Extract first nibble (main operation)
+- `0x0FFF` - Extract address (NNN)
+- `0x0F00` - Extract X register index
+- `0x00F0` - Extract Y register index
+- `0x00FF` - Extract byte value (KK)
+- `0x000F` - Extract nibble value (N)
+
+## Example Implementations
+
+### Display Opcode (DXYN)
+
+The most complex opcode draws sprites to the screen:
+
+```rust
+// OPCODE DXYN - Display n-byte sprite (chip8.rs:729)
+fn OP_Dxyn(&mut self) {
+    let Vx: u8 = (self.op_code & 0x0F00).checked_shr(8).unwrap_or(0).try_into().unwrap();
+    let Vy = (self.op_code & 0x00F0).checked_shr(4).unwrap_or(0);
+    let height = self.op_code & 0x000F;
+    let VIDEO_WIDTH: u8 = 64;
+    let VIDEO_HEIGHT: u8 = 32;
+
+    // Wrap if going over boundaries
+    let x_pos: u8 = self.registers[Vx as usize] % VIDEO_WIDTH;
+    let y_pos: u8 = self.registers[Vy as usize] % VIDEO_HEIGHT;
+
+    self.registers[0xF] = 0;
+
+    for row in 0..height {
+        let sprite_byte: u8 = self.memory[(self.index_register + row) as usize];
+
+        for col in 0..8 {
+            let sprite_pixel = sprite_byte & ((0x80 as u16).checked_shr(col as u32).unwrap_or(0) as u8);
+            
+            let video_index = ((y_pos as u16).wrapping_add(row) * (VIDEO_WIDTH as u16))
+                .wrapping_add(x_pos as u16)
+                .wrapping_add(col) as usize;
+
+            // Sprite pixel is on
+            if sprite_pixel != 0 {
+                // Screen pixel also on - collision
+                if self.video[video_index] == 0xFFFFFFFF {
+                    self.registers[0xF] = 1;
+                }
+
+                // Effectively XOR with the sprite pixel
+                self.video[video_index] ^= 0xFFFFFFFF;
+            }
+        }
+    }
+}
+```
+
+**Why this implementation:**
+- Uses wrapping arithmetic to prevent overflow when sprites wrap around screen edges
+- XOR operation allows sprites to be "erased" by drawing them twice
+- VF register collision detection is critical for game logic (ball hitting paddle, etc.)
+- Processes sprites bit-by-bit using shift operations on sprite bytes
+
+### Clear Screen (00E0)
+
+Simplest opcode - resets the entire video buffer:
+
+```rust
+// OPCODE 00E0 - Clear Screen (chip8.rs:377)
+pub fn OP_00E0(&mut self) {
+    self.video = [0; 2048];
+}
+```
+
+**Why this implementation:**
+- Direct array assignment is the fastest way to zero memory in Rust
+- 2048 = 64 × 32 pixels, matching CHIP-8's display resolution
+
+### Arithmetic with Carry (8XY4)
+
+Adds two registers and sets the carry flag:
+
+```rust
+// OPCODE 8XY4 - Set Vx = Vx + Vy, set VF = carry (chip8.rs:574)
+fn OP_8xy4(&mut self) {
+    let Vx: u8 = (self.op_code & 0x0F00).checked_shr(8).unwrap_or(0).try_into().unwrap();
+    let Vy: u16 = (self.op_code & 0x00F0).checked_shr(4).unwrap_or(0);
+
+    let sum: u16 = self.registers[Vx as usize] as u16 + self.registers[Vy as usize] as u16;
+
+    if sum > 255 {
+        self.registers[0xF] = 1;
+    } else {
+        self.registers[0xF] = 0;
+    }
+
+    self.registers[Vx as usize] = (sum & 0xFF) as u8;
+}
+```
+
+**Why this implementation:**
+- Uses u16 for sum to detect overflow above 255
+- VF (register 0xF) is the carry/borrow flag
+- Masks result with 0xFF to keep only lower 8 bits
+
+### Bit Shift Operations (8XY6, 8XYE)
+
+Right shift saves LSB in VF:
+
+```rust
+// OPCODE 8XY6 - Set Vx = Vx SHR 1 (chip8.rs:618)
+fn OP_8xy6(&mut self) {
+    let Vx: u8 = (self.op_code & 0x0F00).checked_shr(8).unwrap_or(0).try_into().unwrap();
+    
+    // Save LSB in VF
+    self.registers[0xF] = self.registers[Vx as usize] & 0x1;
+    
+    self.registers[Vx as usize].shr_assign(1);
+}
+```
+
+Left shift saves MSB in VF:
+
+```rust
+// OPCODE 8XYE - Set Vx = Vx SHL 1 (chip8.rs:656)
+fn OP_8xyE(&mut self) {
+    let Vx: u8 = (self.op_code & 0x0F00).checked_shr(8).unwrap_or(0).try_into().unwrap();
+    
+    // Save MSB in VF
+    self.registers[0xF] = (self.registers[Vx as usize] & 0x80).checked_shr(7).unwrap_or(0);
+    
+    self.registers[Vx as usize].shl_assign(1);
+}
+```
+
+**Why this implementation:**
+- VF stores the bit that was shifted out (useful for detecting overflow/underflow)
+- Uses Rust's `ShrAssign` and `ShlAssign` traits for efficient in-place operations
+
+### BCD Conversion (FX33)
+
+Converts decimal number to binary-coded decimal:
+
+```rust
+// OPCODE FX33 - Store BCD representation (chip8.rs:913)
+fn OP_Fx33(&mut self) {
+    let Vx: u8 = (self.op_code & 0x0F00).checked_shr(8).unwrap_or(0).try_into().unwrap();
+    let mut value: u8 = self.registers[Vx as usize];
+
+    // Ones place
+    self.memory[(self.index_register + 2) as usize] = value % 10;
+    value /= 10;
+
+    // Tens place
+    self.memory[(self.index_register + 1) as usize] = value % 10;
+    value /= 10;
+
+    // Hundreds place
+    self.memory[self.index_register as usize] = value % 10;
+}
+```
+
+**Why this implementation:**
+- Stores digits in reverse order (ones first) for efficiency
+- Uses modulo and division to extract decimal digits
+- Essential for displaying scores in games
+
+### Wait for Key (FX0A)
+
+Blocks execution until a key is pressed:
+
+```rust
+// OPCODE FX0A - Wait for key press (chip8.rs:820)
+fn OP_Fx0A(&mut self) {
+    let Vx: u8 = (self.op_code & 0x0F00).checked_shr(8).unwrap_or(0).try_into().unwrap();
+
+    if self.keypad[0] != 0 {
+        self.registers[Vx as usize] = 0;
+    } else if self.keypad[1] != 0 {
+        self.registers[Vx as usize] = 1;
+    } 
+    // ... checks for all 16 keys ...
+    else {
+        self.program_counter -= 2;
+    }
+}
+```
+
+**Why this implementation:**
+- If no key is pressed, decrements PC by 2 to repeat this instruction
+- Creates a blocking wait by re-executing the same opcode
+- Stores the key value (0-F) in Vx when a key is found
+
+## Safety Features
+
+The implementation uses Rust's safety features extensively:
+
+```rust
+// Checked operations prevent panics
+.checked_shr(8).unwrap_or(0)
+
+// Wrapping arithmetic for correct overflow behavior
+.wrapping_sub(self.registers[Vy as usize])
+
+// Try conversions with error handling
+let byte: u8 = match u8::try_from(byte) {
+    Ok(number) => number,
+    Err(error) => panic!("Could not convert u16 to u8: {}", error),
+};
+```
+
+## Debug Mode
+
+All opcodes include optional debug output:
+
+```rust
+if self.debug_mode {
+    eprintln!("Ran opcode: {}", function_name!());
+}
+```
+
+Enable with `chip8.debug()` to trace opcode execution.
+
+## Error Handling
+
+Invalid opcodes are caught by the fallback handler:
+
+```rust
+// Fallback OPCODE (chip8.rs:962)
+fn OP_ERR(&mut self) {
+    eprintln!("[ERROR]: Opcode {} not valid", self.op_code);
+}
+```
+
+See [Error Handling](/advanced/error-handling) for complete error strategy.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Function Tables" icon="table" href="/advanced/function-tables">
+    Learn how opcodes are dispatched using function pointer tables
+  </Card>
+  <Card title="Architecture" icon="microchip" href="/concepts/chip8-architecture">
+    Understand the overall emulator architecture
+  </Card>
+</CardGroup>

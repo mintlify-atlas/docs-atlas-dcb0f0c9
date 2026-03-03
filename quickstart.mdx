@@ -1,80 +1,221 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get up and running with CHIP8-rs in minutes
 ---
 
-## Get started in three steps
+# Quickstart
 
-Get your documentation site running locally and make your first customization.
+Get CHIP8-rs running in just a few steps. This guide will walk you through creating a basic CHIP-8 emulator instance, loading a ROM, and executing it.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+Make sure you have Rust installed. If not, get it from [rustup.rs](https://rustup.rs/).
+
+<Steps>
+  <Step title="Create a new Rust project">
+    ```bash
+    cargo new my-chip8-emulator
+    cd my-chip8-emulator
+    ```
+  </Step>
+
+  <Step title="Add CHIP8-rs as a dependency">
+    Add this to your `Cargo.toml`:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    ```toml
+    [dependencies]
+    chip8-rs = { git = "https://github.com/Ferryistaken/CHIP8-rs" }
+    ```
+  </Step>
+
+  <Step title="Create and run your first emulator">
+    Replace the contents of `src/main.rs` with this basic example:
+
+    ```rust
+    use chip8_rs::chip8::Chip8;
+    use std::path::PathBuf;
+    use std::{thread, time};
+
+    fn main() {
+        // Create a new CHIP-8 instance
+        let mut chip8 = Chip8::new();
+        
+        // Load a ROM file
+        let rom_path = PathBuf::from("path/to/your/rom.ch8");
+        chip8.load_rom(rom_path).expect("Failed to load ROM");
+        
+        // Run the emulator with a 10ms cycle delay (~100Hz)
+        let cycle_wait_time = time::Duration::from_millis(10);
+        
+        loop {
+            chip8.Cycle();
+            chip8.pretty_print_video();
+            thread::sleep(cycle_wait_time);
+        }
+    }
+    ```
+
+    This creates an emulator instance, loads a ROM, and runs the main execution loop with built-in terminal rendering.
+  </Step>
+
+  <Step title="Get a test ROM">
+    Download a test ROM to try out your emulator. The repository includes several test ROMs:
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    - `test_opcode.ch8` - Opcode test suite
+    - `IBM-Logo.ch8` - Displays the IBM logo
+    - `BC_test.ch8` - Comprehensive test
 
-### Step 2: Deploy your changes
+    Or find public domain ROMs online to test with.
+  </Step>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+  <Step title="Run it">
+    ```bash
+    cargo run
+    ```
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    You should see the emulator running in your terminal!
+  </Step>
+</Steps>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+## Using the Built-in CLI
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+CHIP8-rs comes with a fully-featured CLI emulator using the `cli` feature:
 
-### Step 3: Go live
+```toml
+[dependencies]
+chip8-rs = { git = "https://github.com/Ferryistaken/CHIP8-rs", features = ["cli"] }
+```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+Then you can use the `cli` binary:
 
-## Next steps
+```rust
+use chip8_rs::chip8::Chip8;
+use std::path::PathBuf;
 
-Now that you have your docs running, explore these key features:
+fn main() {
+    let mut chip8 = Chip8::new();
+    chip8.load_rom(PathBuf::from("roms/test.ch8")).unwrap();
+    chip8.play(10); // 10ms per cycle
+}
+```
+
+Or build and run the CLI directly:
+
+```bash
+git clone https://github.com/Ferryistaken/CHIP8-rs
+cd CHIP8-rs
+cargo build --release --features cli
+./target/release/cli --rom roms/test_opcode.ch8 --clock 10
+```
+
+## Next Steps
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Core Concepts" icon="book" href="/concepts/chip8-architecture">
+    Learn about the CHIP-8 architecture and how the emulator works
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/chip8-struct">
+    Explore the complete API documentation
+  </Card>
+  <Card title="CLI Usage" icon="terminal" href="/guides/cli-usage">
+    Master the command-line interface
+  </Card>
+  <Card title="Web Integration" icon="globe" href="/guides/web-integration">
+    Build a web-based emulator with WebAssembly
+  </Card>
 </CardGroup>
 
+## Common Patterns
+
+### Custom Rendering
+
+If you want custom rendering instead of the built-in terminal output:
+
+```rust
+use chip8_rs::chip8::Chip8;
+
+fn main() {
+    let mut chip8 = Chip8::new();
+    chip8.load_rom("rom.ch8".into()).unwrap();
+    
+    loop {
+        chip8.Cycle();
+        
+        // Access the raw video buffer
+        let video = chip8.export_video();
+        
+        // video is a &[u32; 2048] (64×32 pixels)
+        // 0xFFFFFFFF = white pixel, 0x00000000 = black pixel
+        render_custom(video);
+        
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+fn render_custom(video: &[u32; 2048]) {
+    // Your custom rendering logic here
+    // Could be SDL2, minifb, pixels, or any graphics library
+}
+```
+
+### Handling Keyboard Input
+
+```rust
+use chip8_rs::chip8::Chip8;
+
+fn main() {
+    let mut chip8 = Chip8::new();
+    chip8.load_rom("rom.ch8".into()).unwrap();
+    
+    loop {
+        chip8.Cycle();
+        
+        // Handle input from your input system
+        // CHIP-8 uses a 16-key hexadecimal keypad (0-F)
+        if key_pressed(Key::Num1) {
+            chip8.key_down(0x1);
+        }
+        if key_released(Key::Num1) {
+            chip8.key_up(0x1);
+        }
+        
+        // Render and delay...
+    }
+}
+```
+
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+The keyboard layout typically maps to:
+```
+1 2 3 C    →    1 2 3 4
+4 5 6 D    →    Q W E R  
+7 8 9 E    →    A S D F
+A 0 B F    →    Z X C V
+```
 </Note>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ROM doesn't load">
+    Make sure:
+    - The ROM file path is correct
+    - The ROM is a valid CHIP-8 binary (.ch8 file)
+    - The ROM size is within memory limits (typically under 3.5KB)
+  </Accordion>
+
+  <Accordion title="Display issues">
+    The built-in `pretty_print_video()` clears the terminal on each frame. If you see flickering:
+    - Try increasing the cycle delay
+    - Use a custom rendering solution
+    - Implement double-buffering in your terminal
+  </Accordion>
+
+  <Accordion title="No feature 'cli' found">
+    The CLI feature requires additional dependencies. Make sure you're using:
+    ```toml
+    chip8-rs = { git = "...", features = ["cli"] }
+    ```
+    Or clone and build from source with `cargo build --features cli`
+  </Accordion>
+</AccordionGroup>

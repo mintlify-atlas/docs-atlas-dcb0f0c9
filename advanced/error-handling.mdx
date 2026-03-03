@@ -1,0 +1,496 @@
+---
+title: 'Error Handling'
+description: 'Error types and handling strategies in CHIP-8-rs'
+---
+
+## Overview
+
+CHIP-8-rs uses Rust's type system to handle errors safely. The implementation includes custom error types, safe fallbacks, and defensive programming to prevent crashes from invalid ROMs or operations.
+
+## The Chip8Error Enum
+
+All emulator errors are represented by a custom enum:
+
+```rust
+// chip8.rs:1034-1042
+#[derive(Debug, Clone)]
+pub enum Chip8Error {
+    UnknownOpcode(u16),
+    PcOob(u16),
+    MemOob(usize),
+    StackOverflow,
+    StackUnderflow,
+    BadRegisterIndex(u8),
+}
+```
+
+### Error Variants
+
+#### UnknownOpcode
+
+```rust
+UnknownOpcode(u16)
+```
+
+Fired when encountering an invalid or unimplemented opcode. Contains the opcode value for debugging.
+
+**Example:**
+```rust
+Chip8Error::UnknownOpcode(0xABCD)
+// Display: "Unknown opcode: ABCD"
+```
+
+#### PcOob (Program Counter Out of Bounds)
+
+```rust
+PcOob(u16)
+```
+
+Program counter jumped to invalid memory address. Contains the PC value.
+
+**Example:**
+```rust
+Chip8Error::PcOob(0x5000)  // Beyond 4096-byte memory
+// Display: "PC out of bounds: 5000"
+```
+
+#### MemOob (Memory Out of Bounds)
+
+```rust
+MemOob(usize)
+```
+
+Attempt to access memory outside the 4KB range. Contains the attempted address.
+
+**Example:**
+```rust
+Chip8Error::MemOob(0x10000)
+// Display: "Memory access out of bounds: 0x10000"
+```
+
+Used during ROM loading:
+
+```rust
+// chip8.rs:242-244
+if START + rom.len() > self.memory.len() {
+    return Err(Chip8Error::MemOob(START + rom.len()));
+}
+```
+
+#### StackOverflow
+
+```rust
+StackOverflow
+```
+
+Stack exceeded 16 levels (too many nested subroutine calls).
+
+**Example:**
+```assembly
+; Recursive function with no base case
+:infinite_recursion
+CALL infinite_recursion  ; Stack will overflow after 16 calls
+```
+
+#### StackUnderflow
+
+```rust
+StackUnderflow
+```
+
+Return from subroutine when stack is empty.
+
+**Example:**
+```assembly
+; Start of program
+RET  ; Nothing to return to!
+```
+
+#### BadRegisterIndex
+
+```rust
+BadRegisterIndex(u8)
+```
+
+Attempt to access register outside V0-VF range. Contains the invalid index.
+
+**Example:**
+```rust
+Chip8Error::BadRegisterIndex(16)  // Only 0-15 valid
+// Display: "Invalid register index: 16"
+```
+
+## Display Implementation
+
+The enum implements `Display` for human-readable error messages:
+
+```rust
+// chip8.rs:1046-1063
+impl fmt::Display for Chip8Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Chip8Error::UnknownOpcode(op) =>
+                write!(f, "Unknown opcode: {:04X}", op),
+            Chip8Error::PcOob(pc) =>
+                write!(f, "PC out of bounds: {:04X}", pc),
+            Chip8Error::MemOob(addr) =>
+                write!(f, "Memory access out of bounds: {:#X}", addr),
+            Chip8Error::StackOverflow =>
+                write!(f, "Stack overflow"),
+            Chip8Error::StackUnderflow =>
+                write!(f, "Stack underflow"),
+            Chip8Error::BadRegisterIndex(r) =>
+                write!(f, "Invalid register index: {}", r),
+        }
+    }
+}
+```
+
+**Usage:**
+
+```rust
+let err = Chip8Error::UnknownOpcode(0x1234);
+println!("Error: {}", err);
+// Output: "Error: Unknown opcode: 1234"
+```
+
+Note the formatting:
+- `{:04X}` - 4-digit hexadecimal with leading zeros
+- `{:#X}` - Hexadecimal with `0x` prefix
+
+## Error Handling Strategy
+
+### 1. Result Types
+
+Functions that can fail return `Result<T, Chip8Error>`:
+
+```rust
+// chip8.rs:239-247
+pub fn reset_and_load_bytes(&mut self, rom: &[u8]) -> Result<(), Chip8Error> {
+    self.reset_hard();
+    const START: usize = 0x200;
+    if START + rom.len() > self.memory.len() {
+        return Err(Chip8Error::MemOob(START + rom.len()));
+    }
+    self.memory[START..START + rom.len()].copy_from_slice(rom);
+    Ok(())
+}
+```
+
+**Caller handles error:**
+
+```rust
+match chip8.reset_and_load_bytes(&rom_data) {
+    Ok(()) => println!("ROM loaded successfully"),
+    Err(e) => eprintln!("Failed to load ROM: {}", e),
+}
+```
+
+### 2. Safe Fallbacks
+
+Invalid opcodes don't panic - they call error handler:
+
+```rust
+// chip8.rs:962-967
+fn OP_ERR(&mut self) {
+    eprintln!("[ERROR]: Opcode {} not valid", self.op_code);
+    if self.debug_mode {
+        eprintln!("Ran opcode: {}", function_name!());
+    }
+}
+```
+
+All unimplemented opcodes in tables point to `OP_ERR`:
+
+```rust
+// chip8.rs:156
+let mut table0: [fn(&mut Chip8); 0xE+1] = [Chip8::OP_ERR; 0xE+1];
+```
+
+**Why this matters:** Bad ROMs won't crash the emulator.
+
+### 3. Checked Operations
+
+All bit shifts use checked operations:
+
+```rust
+// Instead of:
+self.op_code >> 8  // Can panic in debug mode
+
+// Use:
+.checked_shr(8).unwrap_or(0)  // Returns 0 on overflow
+```
+
+Example from opcode decoding:
+
+```rust
+// chip8.rs:425
+let Vx: u8 = (self.op_code & 0x0F00)
+    .checked_shr(8)
+    .unwrap_or(0)
+    .try_into()
+    .unwrap();
+```
+
+### 4. Wrapping Arithmetic
+
+Overflow/underflow is intentional in register math:
+
+```rust
+// chip8.rs:608 - Subtraction can underflow
+self.registers[Vx as usize] = self.registers[Vx as usize]
+    .wrapping_sub(self.registers[Vy as usize]);
+```
+
+**Why wrapping?** CHIP-8 uses 8-bit registers - overflow is expected behavior:
+
+```
+5 - 10 = 251 (wraps around to 0xFF - 4)
+```
+
+### 5. Bounds Checking
+
+Memory access checks bounds before loading ROM:
+
+```rust
+// chip8.rs:242-244
+if START + rom.len() > self.memory.len() {
+    return Err(Chip8Error::MemOob(START + rom.len()));
+}
+```
+
+Prevents buffer overflows from malicious or corrupted ROMs.
+
+### 6. IO Error Conversion
+
+File loading converts IO errors:
+
+```rust
+// chip8.rs:250-253
+pub fn load_rom(&mut self, path: PathBuf) -> Result<(), std::io::Error> {
+    let bytes = std::fs::read(path)?;
+    self.reset_and_load_bytes(&bytes)
+        .map_err(|_| std::io::ErrorKind::InvalidData.into())
+}
+```
+
+Converts `Chip8Error::MemOob` to `std::io::Error` for consistency.
+
+## Defensive Programming Patterns
+
+### Pattern 1: Guard Clauses
+
+```rust
+if START + rom.len() > self.memory.len() {
+    return Err(Chip8Error::MemOob(START + rom.len()));
+}
+// Continue with safe operation
+```
+
+Exit early on invalid conditions.
+
+### Pattern 2: Try Conversions
+
+```rust
+// chip8.rs:428-434
+let byte: u8 = match u8::try_from(byte) {
+    Ok(number) => number,
+    Err(error) => panic!(
+        "Could not turn u16 into u8 in OPCODE: 3XKK. Error: {}",
+        error
+    ),
+};
+```
+
+Explicit type conversions with error context.
+
+**Note:** This panics because it should be impossible (masked value always fits in u8). The `match` makes the assumption explicit.
+
+### Pattern 3: Saturation
+
+```rust
+// chip8.rs:1021-1028
+if (self.delay_timer > 0) {
+    self.delay_timer -= 1;
+}
+if (self.sound_timer > 0) {
+    self.sound_timer -= 1;
+}
+```
+
+Timers saturate at 0 instead of wrapping to 255.
+
+### Pattern 4: Safe Indexing
+
+Array access uses checked bounds:
+
+```rust
+// chip8.rs:264 - Safely clamp ROM size
+let copy_len = rom.len().min(mem_len - START);
+self.memory[START..START + copy_len].copy_from_slice(&rom[..copy_len]);
+```
+
+Never copies more than available space.
+
+## Debug Mode Error Reporting
+
+Debug mode provides detailed error context:
+
+```rust
+pub fn debug(&mut self) {
+    self.debug_mode ^= true;
+    eprintln!("Debug mode activated");
+}
+```
+
+Every opcode logs when debug is enabled:
+
+```rust
+if self.debug_mode {
+    eprintln!("Ran opcode: {}", function_name!());
+}
+```
+
+**Example debug output:**
+
+```
+Loading tables
+Tables loaded
+Loading fontset
+Fontset loaded
+Opcode: 4096
+Ran opcode: OP_1nnn
+Opcode: 4352
+Ran opcode: OP_Annn
+[ERROR]: Opcode 65535 not valid
+Ran opcode: OP_ERR
+```
+
+Use this to trace execution and find where ROMs fail.
+
+## Best Practices for Users
+
+### 1. Always Handle Results
+
+```rust
+// Bad
+chip8.load_rom(path).unwrap();  // Panics on error
+
+// Good
+match chip8.load_rom(path) {
+    Ok(()) => { /* continue */ },
+    Err(e) => eprintln!("Failed to load ROM: {}", e),
+}
+
+// Also good
+chip8.load_rom(path)?;  // Propagate error to caller
+```
+
+### 2. Enable Debug for Development
+
+```rust
+let mut chip8 = Chip8::new();
+chip8.debug();  // Enable detailed logging
+chip8.load_rom(rom_path)?;
+```
+
+### 3. Validate Input
+
+```rust
+use std::path::Path;
+
+let path = Path::new("game.ch8");
+
+if !path.exists() {
+    eprintln!("ROM file not found");
+    return;
+}
+
+if path.metadata()?.len() > 3584 {
+    eprintln!("ROM too large (max 3584 bytes)");
+    return;
+}
+
+chip8.load_rom(path.to_path_buf())?;
+```
+
+### 4. Graceful Degradation
+
+```rust
+loop {
+    if let Err(e) = chip8_cycle_safe(&mut chip8) {
+        eprintln!("Emulator error: {}", e);
+        break;  // Stop emulation, don't crash
+    }
+    
+    render(&chip8.video);
+    thread::sleep(Duration::from_millis(16));
+}
+```
+
+## Educational Insights
+
+The error handling demonstrates:
+
+1. **Type-safe errors**: Rust enums prevent invalid error states
+2. **Explicit failure modes**: Each error variant documents what can go wrong
+3. **Defensive programming**: Check assumptions even when "impossible"
+4. **User-friendly messages**: Display trait makes errors readable
+5. **Fail-safe defaults**: Invalid opcodes log errors instead of crashing
+
+## Future Improvements
+
+The current implementation could be enhanced with:
+
+### 1. Error Recovery
+
+```rust
+pub fn Cycle(&mut self) -> Result<(), Chip8Error> {
+    if self.program_counter >= 4096 {
+        return Err(Chip8Error::PcOob(self.program_counter));
+    }
+    // ... rest of cycle ...
+    Ok(())
+}
+```
+
+Allow caller to handle errors instead of logging internally.
+
+### 2. Stack Bounds Checking
+
+```rust
+fn OP_2nnn(&mut self) -> Result<(), Chip8Error> {
+    if self.stack_pointer >= 16 {
+        return Err(Chip8Error::StackOverflow);
+    }
+    // ... rest of opcode ...
+}
+```
+
+Currently stack can overflow silently.
+
+### 3. Diagnostic Information
+
+```rust
+pub enum Chip8Error {
+    UnknownOpcode { 
+        opcode: u16, 
+        pc: u16,  // Where it occurred
+        context: String  // Surrounding opcodes
+    },
+    // ...
+}
+```
+
+Provide more context for debugging.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Opcode Implementation" icon="code" href="/advanced/opcode-implementation">
+    See how opcodes handle edge cases
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/public-methods">
+    Learn the public API and error types
+  </Card>
+</CardGroup>

@@ -1,0 +1,146 @@
+---
+title: Installation
+description: Add CHIP8-rs to your Rust project with cargo
+---
+
+# Installation
+
+## Prerequisites
+
+Before installing CHIP8-rs, ensure you have:
+
+- Rust 1.56 or later
+- Cargo (comes with Rust)
+
+## Install with cargo
+
+Add CHIP8-rs to your project using cargo:
+
+```bash
+cargo add chip8-rs
+```
+
+This installs the core library without any platform-specific dependencies.
+
+## Feature flags
+
+CHIP8-rs provides optional features for different use cases. Choose the features that match your needs:
+
+### CLI feature
+
+For building terminal-based emulators with text UI:
+
+```bash
+cargo add chip8-rs --features cli
+```
+
+The `cli` feature includes:
+- **ratatui**: Terminal UI framework
+- **crossterm**: Cross-platform terminal manipulation
+- **structopt**: Command-line argument parsing
+
+### Web feature
+
+For building browser-based emulators with WebAssembly:
+
+```bash
+cargo add chip8-rs --features web
+```
+
+The `web` feature includes:
+- **wasm-bindgen**: Rust/WebAssembly interop
+- **web-sys**: Web API bindings (Canvas, Audio, Keyboard)
+- **js-sys**: JavaScript API bindings
+- **console_error_panic_hook**: Better error messages in browser console
+
+## Manual setup
+
+Alternatively, add CHIP8-rs to your `Cargo.toml` manually:
+
+<CodeGroup>
+
+```toml Core library only
+[dependencies]
+chip8-rs = "0.1.0"
+```
+
+```toml With CLI feature
+[dependencies]
+chip8-rs = { version = "0.1.0", features = ["cli"] }
+```
+
+```toml With web feature
+[dependencies]
+chip8-rs = { version = "0.1.0", features = ["web"] }
+```
+
+```toml Multiple features
+[dependencies]
+chip8-rs = { version = "0.1.0", features = ["cli", "web"] }
+```
+
+</CodeGroup>
+
+## Verify installation
+
+Create a simple test file to verify the installation:
+
+```rust src/main.rs
+use chip8_rs::chip8::Chip8;
+
+fn main() {
+    let chip8 = Chip8::new();
+    println!("CHIP8-rs initialized successfully!");
+}
+```
+
+Run your program:
+
+```bash
+cargo run
+```
+
+You should see the success message printed to the console.
+
+<Note>
+The library uses the crate name `chip8_rs` (with underscore) even though the package name is `chip8-rs` (with hyphen). Use `chip8_rs` in your import statements.
+</Note>
+
+## Building from source
+
+To build CHIP8-rs from source:
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/Ferryistaken/CHIP8-rs.git
+    cd CHIP8-rs
+    ```
+  </Step>
+  
+  <Step title="Build the library">
+    ```bash
+    cargo build --release
+    ```
+  </Step>
+  
+  <Step title="Build with CLI feature">
+    ```bash
+    cargo build --release --features cli
+    ```
+    
+    The binary will be available at `target/release/cli`
+  </Step>
+  
+  <Step title="Run tests">
+    ```bash
+    cargo test
+    ```
+  </Step>
+</Steps>
+
+## Next steps
+
+<Card title="Quick start guide" icon="rocket" href="/quickstart">
+  Learn how to create your first CHIP-8 emulator with CHIP8-rs
+</Card>

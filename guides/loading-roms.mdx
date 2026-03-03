@@ -1,0 +1,389 @@
+---
+title: Loading ROMs
+description: Different methods to load CHIP-8 ROM files into the emulator
+---
+
+CHIP8-rs provides multiple methods for loading ROM data, whether from files, byte arrays, or with automatic reset functionality.
+
+## ROM Loading Methods
+
+All ROM data is loaded into memory starting at address `0x200`, which is the standard CHIP-8 program start location.
+
+### load_rom() - From File Path
+
+Load a ROM from a file path. This is the most common method for native applications.
+
+```rust
+use chip8_rs::chip8::Chip8;
+use std::path::PathBuf;
+
+let mut chip8 = Chip8::new();
+let rom_path = PathBuf::from("roms/pong.ch8");
+
+match chip8.load_rom(rom_path) {
+    Ok(_) => println!("ROM loaded successfully"),
+    Err(e) => eprintln!("Failed to load ROM: {}", e),
+}
+```
+
+**Signature:**
+```rust
+pub fn load_rom(&mut self, path: PathBuf) -> Result<(), std::io::Error>
+```
+
+**Behavior:**
+- Reads the file from the given path
+- Calls `reset_hard()` to clear emulator state
+- Loads ROM bytes starting at memory address `0x200`
+- Returns error if file doesn't exist, can't be read, or is too large
+
+<Note>
+`load_rom()` automatically resets the emulator before loading, so you don't need to call `reset_hard()` manually.
+</Note>
+
+### load_rom_bytes() - From Byte Array
+
+Load ROM data directly from a byte slice without resetting the emulator.
+
+```rust
+let mut chip8 = Chip8::new();
+
+// Example: hardcoded ROM data
+let rom_data: &[u8] = &[
+    0x00, 0xE0, // CLS - Clear screen
+    0x12, 0x00, // JP 0x200 - Jump to start
+];
+
+chip8.load_rom_bytes(rom_data);
+```
+
+**Signature:**
+```rust
+pub fn load_rom_bytes(&mut self, rom: &[u8])
+```
+
+**Behavior:**
+- Copies bytes to memory starting at `0x200`
+- Does NOT reset the emulator
+- Truncates silently if ROM is too large (max: 4096 - 512 = 3584 bytes)
+- Does nothing if `0x200` is out of bounds (defensive check)
+
+<Warning>
+`load_rom_bytes()` does NOT reset the emulator. If you need a clean state, call `reset_hard()` first or use `reset_and_load_bytes()` instead.
+</Warning>
+
+### reset_and_load_bytes() - Reset + Load
+
+Reset the emulator to a clean state and then load ROM bytes. This is the recommended method when loading from byte arrays.
+
+```rust
+use chip8_rs::chip8::{Chip8, Chip8Error};
+
+let mut chip8 = Chip8::new();
+
+let rom_data: Vec<u8> = vec![
+    0x00, 0xE0, // CLS
+    0xA2, 0x2A, // LD I, 0x22A
+    0x60, 0x0C, // LD V0, 0x0C
+];
+
+match chip8.reset_and_load_bytes(&rom_data) {
+    Ok(_) => println!("ROM loaded successfully"),
+    Err(Chip8Error::MemOob(addr)) => {
+        eprintln!("ROM too large: would write to {:#X}", addr);
+    },
+    Err(e) => eprintln!("Error: {:?}", e),
+}
+```
+
+**Signature:**
+```rust
+pub fn reset_and_load_bytes(&mut self, rom: &[u8]) -> Result<(), Chip8Error>
+```
+
+**Behavior:**
+- Calls `reset_hard()` to completely reset the emulator
+- Validates ROM size (must fit in memory from `0x200` onward)
+- Loads ROM bytes starting at `0x200`
+- Returns `Chip8Error::MemOob` if ROM is too large
+
+<Tip>
+This is the method used internally by the WASM `load_rom()` function for web integration.
+</Tip>
+
+## Loading in Different Contexts
+
+<Tabs>
+  <Tab title="Native CLI">
+    The CLI uses `load_rom()` to load from file paths:
+    
+    ```rust
+    use chip8_rs::chip8::Chip8;
+    use structopt::StructOpt;
+    use std::path::PathBuf;
+    
+    #[derive(StructOpt)]
+    struct Opt {
+        #[structopt(short = "r", long = "rom")]
+        rom: PathBuf,
+    }
+    
+    fn main() {
+        let opt = Opt::from_args();
+        let mut chip8 = Chip8::new();
+        
+        chip8.load_rom(opt.rom)
+            .expect("Failed to load ROM");
+        
+        // Start emulation loop
+    }
+    ```
+  </Tab>
+  
+  <Tab title="WebAssembly">
+    The WASM build uses `reset_and_load_bytes()` with data from JavaScript:
+    
+    ```rust
+    use wasm_bindgen::prelude::*;
+    
+    #[wasm_bindgen]
+    pub fn load_rom(bytes: &[u8]) -> Result<(), JsValue> {
+        EMU.with(|cell| {
+            let mut emu = cell.borrow_mut();
+            emu.chip8.reset_and_load_bytes(bytes)
+                .map_err(|e| JsValue::from_str(&format!("{e:?}")))?;
+            emu.loaded = true;
+            emu.present(); // Render once
+            Ok(())
+        })
+    }
+    ```
+    
+    From JavaScript:
+    ```javascript
+    import { load_rom } from './pkg/chip8_rs.js';
+    
+    const response = await fetch('roms/pong.ch8');
+    const romData = new Uint8Array(await response.arrayBuffer());
+    await load_rom(romData);
+    ```
+  </Tab>
+  
+  <Tab title="Embedded ROMs">
+    Include ROM data at compile time:
+    
+    ```rust
+    const EMBEDDED_ROM: &[u8] = include_bytes!("roms/test_opcode.ch8");
+    
+    fn main() {
+        let mut chip8 = Chip8::new();
+        chip8.reset_and_load_bytes(EMBEDDED_ROM)
+            .expect("Failed to load embedded ROM");
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Memory Layout
+
+Understanding where ROMs are loaded helps debug issues:
+
+```
+┌─────────────────┬──────────┐
+│ Memory Region   │ Address  │
+├─────────────────┼──────────┤
+│ Interpreter     │ 0x000    │ (not used in modern emulators)
+├─────────────────┼──────────┤
+│ Font Data       │ 0x050    │ Built-in hex font (0-F)
+├─────────────────┼──────────┤
+│ Free Space      │ 0x0A0    │
+├─────────────────┼──────────┤
+│ ROM START       │ 0x200    │ ← Your ROM loads here
+├─────────────────┼──────────┤
+│ ROM Data        │ ...      │
+├─────────────────┼──────────┤
+│ End of Memory   │ 0xFFF    │
+└─────────────────┴──────────┘
+```
+
+**Maximum ROM Size:** `0xFFF - 0x200 + 1 = 3584 bytes`
+
+## Validation and Error Handling
+
+<Steps>
+  <Step title="Check ROM size">
+    ```rust
+    const MAX_ROM_SIZE: usize = 0x1000 - 0x200; // 3584 bytes
+    
+    if rom_data.len() > MAX_ROM_SIZE {
+        eprintln!("ROM too large: {} bytes (max: {})", 
+                  rom_data.len(), MAX_ROM_SIZE);
+    }
+    ```
+  </Step>
+  
+  <Step title="Verify file exists">
+    ```rust
+    use std::path::Path;
+    
+    let rom_path = Path::new("roms/game.ch8");
+    if !rom_path.exists() {
+        eprintln!("ROM file not found: {}", rom_path.display());
+    }
+    ```
+  </Step>
+  
+  <Step title="Handle load errors">
+    ```rust
+    match chip8.load_rom(rom_path) {
+        Ok(_) => {
+            println!("Loaded ROM: {}", rom_path.display());
+        },
+        Err(e) => {
+            eprintln!("Failed to load ROM: {}", e);
+            std::process::exit(1);
+        }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Resetting the Emulator
+
+The `reset_hard()` method completely resets the emulator state:
+
+```rust
+pub fn reset_hard(&mut self)
+```
+
+**What it resets:**
+- All memory to zero (except fonts, which are reloaded)
+- Program counter to `0x200`
+- Index register to `0`
+- Stack pointer to `0`
+- Stack to all zeros
+- Video buffer to all zeros
+- Delay timer to `0`
+- Sound timer to `0`
+- Keypad state to all zeros
+- RNG state to fixed seed (`0x1234_5678`)
+- Last opcode to `0`
+
+**When to use:**
+- Before loading a new ROM (if not using `load_rom()` or `reset_and_load_bytes()`)
+- To restart the current ROM from the beginning
+- After an error state
+
+```rust
+// Manual reset before loading
+let mut chip8 = Chip8::new();
+chip8.reset_hard();
+chip8.load_rom_bytes(&rom_data);
+
+// Or use the combined method
+chip8.reset_and_load_bytes(&rom_data).unwrap();
+```
+
+## Dumping ROM Data
+
+You can read back ROM data from memory for debugging:
+
+```rust
+pub fn dump_rom(&self, start_address: usize, byte_number: usize) -> Vec<u8>
+```
+
+**Example:**
+```rust
+// Read first 16 bytes of ROM
+let rom_start = chip8.dump_rom(0x200, 16);
+
+for (i, byte) in rom_start.iter().enumerate() {
+    print!("{:02X} ", byte);
+    if (i + 1) % 8 == 0 {
+        println!();
+    }
+}
+```
+
+Output:
+```
+00 E0 A2 2A 60 0C 61 08
+70 09 00 EE 12 04 00 00
+```
+
+## Example: ROM Loader Utility
+
+Here's a complete example of a robust ROM loader:
+
+```rust
+use chip8_rs::chip8::{Chip8, Chip8Error};
+use std::path::{Path, PathBuf};
+use std::fs;
+
+fn load_rom_safe(chip8: &mut Chip8, path: &Path) -> Result<(), String> {
+    // Check file exists
+    if !path.exists() {
+        return Err(format!("File not found: {}", path.display()));
+    }
+    
+    // Check file size
+    let metadata = fs::metadata(path)
+        .map_err(|e| format!("Cannot read file metadata: {}", e))?;
+    
+    let max_size = 0x1000 - 0x200;
+    if metadata.len() > max_size as u64 {
+        return Err(format!(
+            "ROM too large: {} bytes (max: {} bytes)",
+            metadata.len(), max_size
+        ));
+    }
+    
+    // Load ROM
+    chip8.load_rom(path.to_path_buf())
+        .map_err(|e| format!("Failed to load ROM: {}", e))?;
+    
+    println!("Loaded {} ({} bytes)", path.display(), metadata.len());
+    Ok(())
+}
+
+fn main() {
+    let mut chip8 = Chip8::new();
+    let rom_path = Path::new("roms/pong.ch8");
+    
+    match load_rom_safe(&mut chip8, rom_path) {
+        Ok(_) => {
+            // Start emulation
+            println!("Starting emulation...");
+        },
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+```
+
+## Finding ROMs
+
+<Note>
+CHIP-8 ROMs are typically small (a few hundred bytes) and use the `.ch8` extension, though `.rom` and `.bin` are also common.
+</Note>
+
+Public domain CHIP-8 ROMs are available from:
+- [Chip-8 Games Pack](https://www.zophar.net/pdroms/chip8.html)
+- [CHIP-8 Archive](https://github.com/kripod/chip8-roms)
+- Test ROMs for emulator validation
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Using the Library" icon="code" href="/guides/using-the-library">
+    Learn the core emulation loop
+  </Card>
+  <Card title="Debug Mode" icon="bug" href="/guides/debug-mode">
+    Trace ROM execution with debug logging
+  </Card>
+  <Card title="Web Integration" icon="globe" href="/guides/web-integration">
+    Load ROMs in the browser with WASM
+  </Card>
+</CardGroup>

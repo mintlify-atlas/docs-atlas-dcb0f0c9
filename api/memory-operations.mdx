@@ -1,0 +1,312 @@
+---
+title: 'Memory Operations'
+description: 'Methods for loading ROMs and manipulating CHIP-8 memory'
+---
+
+## load_rom()
+
+Loads a ROM file from the filesystem into CHIP-8 memory.
+
+**Signature:** `src/chip8.rs:250-253`
+
+```rust
+pub fn load_rom(&mut self, path: PathBuf) -> Result<(), std::io::Error>
+```
+
+### Parameters
+
+<ParamField path="path" type="PathBuf" required>
+  The file path to the CHIP-8 ROM file to load.
+</ParamField>
+
+### Returns
+
+<ResponseField name="Result" type="Result<(), std::io::Error>">
+  Returns `Ok(())` on success, or an `io::Error` if the file cannot be read or if the ROM is too large to fit in memory.
+</ResponseField>
+
+### Description
+
+Reads a ROM file from disk and loads it into CHIP-8 memory. This method:
+1. Reads the entire file into a byte vector
+2. Calls `reset_hard()` to clear all state
+3. Copies the ROM data into memory starting at address 0x200
+4. Returns an error if the ROM is too large (exceeds available memory)
+
+### Memory Layout
+
+- **ROM start address**: 0x200 (512 in decimal)
+- **Maximum ROM size**: 3584 bytes (4096 - 512)
+- **Font data**: 0x050 - 0x09F (preserved by reset)
+
+### Example
+
+```rust
+use chip8_rs::chip8::Chip8;
+use std::path::PathBuf;
+
+let mut chip8 = Chip8::new();
+let rom_path = PathBuf::from("roms/pong.ch8");
+
+match chip8.load_rom(rom_path) {
+    Ok(_) => println!("ROM loaded successfully"),
+    Err(e) => eprintln!("Failed to load ROM: {}", e),
+}
+```
+
+<Warning>
+This method calls `reset_hard()`, which clears all memory, registers, and state before loading the ROM. Any previously loaded program or data will be lost.
+</Warning>
+
+---
+
+## load_rom_bytes()
+
+Loads ROM data from a byte slice into CHIP-8 memory without resetting.
+
+**Signature:** `src/chip8.rs:255-265`
+
+```rust
+pub fn load_rom_bytes(&mut self, rom: &[u8])
+```
+
+### Parameters
+
+<ParamField path="rom" type="&[u8]" required>
+  A byte slice containing the ROM data to load.
+</ParamField>
+
+### Description
+
+Copies ROM data into memory starting at address 0x200. Unlike `load_rom()`, this method:
+- Does **not** reset the emulator state
+- Does **not** return an error
+- Silently truncates if the ROM is too large
+- Useful when you already have the ROM data in memory (e.g., embedded ROMs, network downloads)
+
+### Behavior
+
+The method copies up to `min(rom.len(), 3584)` bytes into memory. If the ROM is larger than available memory, only the first 3584 bytes are copied.
+
+### Example
+
+```rust
+use chip8_rs::chip8::Chip8;
+
+let mut chip8 = Chip8::new();
+
+// Load from embedded ROM data
+const EMBEDDED_ROM: &[u8] = include_bytes!("../roms/test.ch8");
+chip8.load_rom_bytes(EMBEDDED_ROM);
+
+// Or from a byte vector
+let rom_data: Vec<u8> = vec![0x00, 0xE0, 0x12, 0x00]; // Simple program
+chip8.load_rom_bytes(&rom_data);
+```
+
+<Note>
+This method does not reset the emulator. If you need a clean state, call `reset_hard()` before loading, or use `reset_and_load_bytes()` instead.
+</Note>
+
+---
+
+## reset_and_load_bytes()
+
+Resets the emulator and loads ROM data from a byte slice.
+
+**Signature:** `src/chip8.rs:239-247`
+
+```rust
+pub fn reset_and_load_bytes(&mut self, rom: &[u8]) -> Result<(), Chip8Error>
+```
+
+### Parameters
+
+<ParamField path="rom" type="&[u8]" required>
+  A byte slice containing the ROM data to load.
+</ParamField>
+
+### Returns
+
+<ResponseField name="Result" type="Result<(), Chip8Error>">
+  Returns `Ok(())` on success, or `Chip8Error::MemOob(usize)` if the ROM is too large to fit in memory.
+</ResponseField>
+
+### Description
+
+Combines `reset_hard()` and ROM loading in a single operation. This is the preferred method when loading ROM data from memory and you want a clean state.
+
+### Error Handling
+
+Returns `Chip8Error::MemOob(addr)` where `addr` is the out-of-bounds address if:
+- `0x200 + rom.len() > 4096`
+
+### Example
+
+```rust
+use chip8_rs::chip8::Chip8;
+
+let mut chip8 = Chip8::new();
+let rom_data = std::fs::read("test.ch8").expect("Failed to read file");
+
+match chip8.reset_and_load_bytes(&rom_data) {
+    Ok(_) => println!("ROM loaded successfully"),
+    Err(e) => eprintln!("Error: {}", e),
+}
+```
+
+---
+
+## reset_hard()
+
+Performs a complete reset of the CHIP-8 emulator to its initial state.
+
+**Signature:** `src/chip8.rs:218-237`
+
+```rust
+pub fn reset_hard(&mut self)
+```
+
+### Description
+
+Resets all emulator state to initial values, including:
+- Clearing all memory (4096 bytes)
+- Reloading font data at 0x050
+- Resetting program counter to 0x200
+- Clearing index register and stack pointer
+- Clearing the stack
+- Clearing the video display
+- Resetting both delay and sound timers
+- Clearing all keypad state
+- Resetting RNG state to 0x1234_5678 (fixed seed for determinism)
+- Clearing last_opcode
+
+### Example
+
+```rust
+let mut chip8 = Chip8::new();
+
+// Load and run a ROM
+chip8.load_rom(PathBuf::from("game.ch8")).unwrap();
+for _ in 0..1000 { chip8.Cycle(); }
+
+// Reset to clean state
+chip8.reset_hard();
+
+// Load a different ROM
+chip8.load_rom(PathBuf::from("other.ch8")).unwrap();
+```
+
+<Note>
+This method preserves the opcode dispatch tables and debug_mode setting. Only the emulator state is reset.
+</Note>
+
+---
+
+## dump_rom()
+
+Extracts a region of memory as a byte vector.
+
+**Signature:** `src/chip8.rs:268-275`
+
+```rust
+pub fn dump_rom(&self, start_address: usize, byte_number: usize) -> Vec<u8>
+```
+
+### Parameters
+
+<ParamField path="start_address" type="usize" required>
+  The memory address to start reading from.
+</ParamField>
+
+<ParamField path="byte_number" type="usize" required>
+  The number of bytes to read.
+</ParamField>
+
+### Returns
+
+<ResponseField name="bytes" type="Vec<u8>">
+  A vector containing the requested bytes from memory.
+</ResponseField>
+
+### Description
+
+Reads a contiguous region of memory and returns it as a vector. Useful for:
+- Debugging: Inspecting memory contents
+- Saving state: Dumping ROM or program data
+- Testing: Verifying memory modifications
+
+### Example
+
+```rust
+let mut chip8 = Chip8::new();
+chip8.load_rom(PathBuf::from("test.ch8")).unwrap();
+
+// Dump the first 16 bytes of the ROM
+let rom_start = chip8.dump_rom(0x200, 16);
+for (i, byte) in rom_start.iter().enumerate() {
+    println!("0x{:03X}: 0x{:02X}", 0x200 + i, byte);
+}
+
+// Dump the font data
+let font_data = chip8.dump_rom(0x50, 80);
+```
+
+<Warning>
+This method does not perform bounds checking. Reading beyond memory address 4095 will cause a panic.
+</Warning>
+
+---
+
+## Chip8Error
+
+Error type for CHIP-8 operations.
+
+**Defined in:** `src/chip8.rs:1034-1063`
+
+```rust
+pub enum Chip8Error {
+    UnknownOpcode(u16),
+    PcOob(u16),
+    MemOob(usize),
+    StackOverflow,
+    StackUnderflow,
+    BadRegisterIndex(u8),
+}
+```
+
+### Variants
+
+<ParamField path="UnknownOpcode" type="u16">
+  An unrecognized opcode was encountered. Contains the invalid opcode value.
+</ParamField>
+
+<ParamField path="PcOob" type="u16">
+  Program counter went out of bounds. Contains the invalid PC value.
+</ParamField>
+
+<ParamField path="MemOob" type="usize">
+  Memory access out of bounds. Contains the invalid memory address.
+</ParamField>
+
+<ParamField path="StackOverflow">
+  Stack pointer exceeded 16 (maximum stack depth).
+</ParamField>
+
+<ParamField path="StackUnderflow">
+  Attempted to pop from an empty stack.
+</ParamField>
+
+<ParamField path="BadRegisterIndex" type="u8">
+  Invalid register index (must be 0-15). Contains the invalid index.
+</ParamField>
+
+### Display Implementation
+
+The error type implements `Display` for human-readable error messages:
+
+```rust
+Chip8Error::UnknownOpcode(0x1234)  → "Unknown opcode: 1234"
+Chip8Error::MemOob(0x2000)         → "Memory access out of bounds: 0x2000"
+Chip8Error::StackOverflow          → "Stack overflow"
+```

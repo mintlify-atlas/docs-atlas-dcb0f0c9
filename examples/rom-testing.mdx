@@ -1,0 +1,404 @@
+---
+title: ROM Testing
+description: Test your CHIP-8 emulator implementation with standard test ROMs and understand the expected behavior
+---
+
+Testing is crucial to ensure your CHIP-8 emulator correctly implements all opcodes and behaviors. This guide covers the test ROMs included with CHIP8-rs and how to use them.
+
+## Available Test ROMs
+
+CHIP8-rs includes several test ROMs in the `roms/` directory:
+
+| ROM File | Purpose | Expected Behavior |
+|----------|---------|-------------------|
+| `test_opcode.ch8` | Comprehensive opcode test | Displays test results for all opcodes |
+| `BC_test.ch8` | BC (Backwards Compatibility) test | Tests edge cases and quirks |
+| `IBM-Logo.ch8` | IBM logo display | Shows the IBM logo (no input) |
+| `Chip8-Picture.ch8` | Static image test | Displays a picture |
+| `Chip8-Picture-inspect.ch8` | Picture with inspection | Like above but for debugging |
+
+See the full list at [`~/workspace/source/roms/`](/home/daytona/workspace/source/roms/).
+
+## Running Test ROMs
+
+<Steps>
+
+### Load and Run a Test ROM
+
+Use the basic emulation pattern to run any test ROM:
+
+```rust
+use chip8_rs::chip8::Chip8;
+use std::path::PathBuf;
+use std::{thread, time};
+
+fn main() -> Result<(), std::io::Error> {
+    let mut chip8 = Chip8::new();
+    
+    // Load test ROM
+    let test_rom = PathBuf::from("roms/test_opcode.ch8");
+    chip8.load_rom(test_rom)?;
+    
+    // Run emulation
+    let speed = 10; // ms per cycle
+    loop {
+        chip8.Cycle();
+        chip8.pretty_print_video();
+        thread::sleep(time::Duration::from_millis(speed));
+    }
+}
+```
+
+### Using the CLI
+
+If you have the `cli` feature enabled, use the command-line interface:
+
+```bash
+# Run with default settings (10ms per cycle)
+cargo run --features cli --bin cli -- -r roms/test_opcode.ch8
+
+# Run with custom speed (faster)
+cargo run --features cli --bin cli -- -r roms/test_opcode.ch8 -c 5
+
+# Run with debug output
+cargo run --features cli --bin cli -- -r roms/test_opcode.ch8 --debug
+```
+
+See the CLI implementation at [`src/bin/cli.rs`](/home/daytona/workspace/source/src/bin/cli.rs).
+
+### Using the Web Frontend
+
+For browser-based testing:
+
+```bash
+# Build WASM module
+wasm-pack build --target web --features web
+
+# Serve the directory (use any static file server)
+python3 -m http.server 8000
+
+# Open http://localhost:8000 in browser
+# Select test ROM from dropdown or load custom ROM
+```
+
+The web interface is defined in [`index.html`](/home/daytona/workspace/source/index.html).
+
+</Steps>
+
+## Test ROM Details
+
+### test_opcode.ch8
+
+The primary opcode test suite. This ROM tests:
+
+- **Arithmetic operations**: `8XY4` (ADD), `8XY5` (SUB), `8XY7` (SUBN)
+- **Logical operations**: `8XY1` (OR), `8XY2` (AND), `8XY3` (XOR)
+- **Shifts**: `8XY6` (SHR), `8XYE` (SHL)
+- **Conditional skips**: `3XKK`, `4XKK`, `5XY0`, `9XY0`
+- **Jumps**: `1NNN`, `BNNN`
+- **Subroutines**: `2NNN` (CALL), `00EE` (RET)
+- **Drawing**: `DXYN` (sprite rendering, collision detection)
+- **Timers**: `FX07` (read delay timer), `FX15` (set delay timer)
+- **Memory**: `FX55` (store registers), `FX65` (load registers)
+- **BCD**: `FX33` (binary-coded decimal)
+
+**Expected Result**: If all tests pass, you'll see "OK" or similar success indicators on screen.
+
+### IBM-Logo.ch8
+
+A simple ROM that displays the IBM logo. Perfect for initial testing.
+
+**Expected Behavior**:
+1. Displays the letters "IBM" in large pixel art
+2. No animation or input required
+3. Should appear immediately after loading
+
+**What This Tests**:
+- Basic drawing (`DXYN` opcode)
+- Font sprite loading
+- Memory access
+- Video buffer rendering
+
+If you see the IBM logo clearly, your basic rendering and drawing opcodes work correctly.
+
+### BC_test.ch8
+
+Backwards compatibility test for CHIP-8 quirks and edge cases.
+
+**What This Tests**:
+- Sprite wrapping behavior
+- VF register handling in various opcodes
+- Load/store operations
+- Index register behavior
+
+**Expected Result**: Displays test results. Any failures indicate compatibility issues.
+
+### Picture ROMs
+
+`Chip8-Picture.ch8` and `Chip8-Picture-inspect.ch8` display static images.
+
+**Purpose**:
+- Verify correct sprite rendering
+- Test collision detection
+- Visual debugging aid
+
+## Writing Your Own Tests
+
+### Unit Testing with ROM Bytes
+
+You can write Rust unit tests using `reset_and_load_bytes()`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use chip8_rs::chip8::Chip8;
+
+    #[test]
+    fn test_add_opcode() {
+        let mut chip8 = Chip8::new();
+        
+        // Program: Set V0=5, V1=3, V2=V0+V1
+        let program = vec![
+            0x60, 0x05,  // 6005: V0 = 5
+            0x61, 0x03,  // 6103: V1 = 3
+            0x80, 0x14,  // 8014: V0 = V0 + V1
+        ];
+        
+        chip8.reset_and_load_bytes(&program).unwrap();
+        
+        // Execute instructions
+        chip8.Cycle(); // V0 = 5
+        chip8.Cycle(); // V1 = 3
+        chip8.Cycle(); // V0 = V0 + V1
+        
+        // Check result (accessing registers requires exposing them)
+        // For now, test via side effects like video buffer
+    }
+
+    #[test]
+    fn test_draw_sprite() {
+        let mut chip8 = Chip8::new();
+        
+        // Program: Draw 5-byte sprite at (0,0)
+        let program = vec![
+            0xA2, 0x0A,  // A20A: I = 0x20A (sprite data location)
+            0x60, 0x00,  // 6000: V0 = 0 (x)
+            0x61, 0x00,  // 6100: V1 = 0 (y)
+            0xD0, 0x15,  // D015: Draw 5-byte sprite at (V0, V1)
+            0x00, 0x00,  // Padding
+            // Sprite data (5 bytes)
+            0xF0, 0x90, 0x90, 0x90, 0xF0,
+        ];
+        
+        chip8.reset_and_load_bytes(&program).unwrap();
+        
+        // Execute
+        chip8.Cycle(); // Set I
+        chip8.Cycle(); // Set V0
+        chip8.Cycle(); // Set V1
+        chip8.Cycle(); // Draw sprite
+        
+        // Verify pixels were set
+        let pixel_on = chip8.video[0] == 0xFFFFFFFF;
+        assert!(pixel_on, "First pixel should be on after drawing sprite");
+    }
+}
+```
+
+See existing unit tests at [`chip8.rs:1072-1111`](/home/daytona/workspace/source/src/chip8.rs:1072).
+
+### Testing Specific Opcodes
+
+Create focused tests for individual opcodes:
+
+```rust
+#[test]
+fn test_clear_screen() {
+    let mut chip8 = Chip8::new();
+    
+    // Set some pixels
+    chip8.video[0] = 0xFFFFFFFF;
+    chip8.video[100] = 0xFFFFFFFF;
+    
+    // Execute 00E0 (clear screen)
+    let program = vec![0x00, 0xE0];
+    chip8.reset_and_load_bytes(&program).unwrap();
+    chip8.Cycle();
+    
+    // All pixels should be off
+    for pixel in &chip8.video {
+        assert_eq!(*pixel, 0, "All pixels should be cleared");
+    }
+}
+
+#[test]
+fn test_skip_if_equal() {
+    let mut chip8 = Chip8::new();
+    
+    // Program: V0=5, skip if V0==5, V1=1, V1=2
+    let program = vec![
+        0x60, 0x05,  // V0 = 5
+        0x30, 0x05,  // Skip next if V0 == 5
+        0x61, 0x01,  // V1 = 1 (should be skipped)
+        0x61, 0x02,  // V1 = 2
+    ];
+    
+    chip8.reset_and_load_bytes(&program).unwrap();
+    chip8.Cycle(); // V0 = 5
+    chip8.Cycle(); // Skip
+    chip8.Cycle(); // V1 = 2 (0x61, 0x01 was skipped)
+    
+    // V1 should be 2, not 1
+    // (requires exposing registers or testing via side effects)
+}
+```
+
+## Debugging Failed Tests
+
+### Enable Debug Mode
+
+When a test ROM fails, enable debug output:
+
+```rust
+let mut chip8 = Chip8::new();
+chip8.debug(); // Enable debug mode
+chip8.load_rom(test_rom)?;
+```
+
+This prints to stderr:
+- Each opcode executed (as hex)
+- Function names for each opcode
+- Table lookups
+
+### Inspect Last Opcode
+
+Get the most recently executed opcode:
+
+```rust
+loop {
+    chip8.Cycle();
+    let last_op = chip8.last_opcode();
+    println!("Executed: {:04X}", last_op);
+    
+    // Can break on specific opcodes for inspection
+    if last_op == 0x00E0 { // CLS
+        println!("Screen cleared!");
+    }
+}
+```
+
+See [`chip8.rs:108`](/home/daytona/workspace/source/src/chip8.rs:108) for the `last_opcode()` method.
+
+### Step Through Execution
+
+Run one instruction at a time:
+
+```rust
+// Execute exactly 10 instructions
+for i in 0..10 {
+    println!("Cycle {}", i);
+    chip8.Cycle();
+    chip8.pretty_print_video();
+    std::io::stdin().read_line(&mut String::new())?; // Wait for Enter
+}
+```
+
+### Verify Video Output
+
+Check specific pixels after drawing:
+
+```rust
+chip8.Cycle(); // Execute draw instruction
+
+// Check if expected pixels are set
+let pixel_at_10_10 = chip8.video[10 * 64 + 10];
+println!("Pixel at (10,10): {}", 
+    if pixel_at_10_10 == 0xFFFFFFFF { "ON" } else { "OFF" });
+
+// Count total pixels on
+let pixels_on: usize = chip8.video.iter()
+    .filter(|&&p| p == 0xFFFFFFFF)
+    .count();
+println!("Total pixels on: {}", pixels_on);
+```
+
+## Common Test Failures
+
+### Wrong Opcode Implementation
+
+**Symptom**: Test ROM shows errors or behaves incorrectly.
+
+**Solution**: 
+1. Enable debug mode to see which opcode is failing
+2. Check the opcode implementation in `chip8.rs`
+3. Compare against [CHIP-8 specification](http://devernay.free.fr/hacks/chip8/C8TECH10.HTM)
+
+### Timing Issues
+
+**Symptom**: ROM runs too fast/slow, timers don't work.
+
+**Solution**:
+- Timers decrement at 60 Hz (every cycle in a 60 Hz loop)
+- Adjust cycle sleep duration: `10ms ≈ 100 Hz`, `16ms ≈ 60 Hz`
+
+### Drawing Problems
+
+**Symptom**: Sprites don't appear or appear incorrectly.
+
+**Check**:
+- Index register (`I`) points to correct memory location
+- Sprite height is correct (low nibble of `DXYN`)
+- Coordinates wrap correctly (modulo 64 for x, modulo 32 for y)
+- XOR behavior: drawing same sprite twice should erase it
+
+### Input Not Working
+
+**Symptom**: Keypad input doesn't register.
+
+**Check**:
+- Keypad array is being updated each frame
+- Key indices are 0x0-0xF (not 0-15 decimal confusion)
+- Edge detection for `FX0A` opcode uses `key_down()`/`key_up()`
+
+## Benchmarking Performance
+
+Test emulator speed:
+
+```rust
+use std::time::Instant;
+
+let mut chip8 = Chip8::new();
+chip8.load_rom(rom_path)?;
+
+let start = Instant::now();
+let cycles = 100_000;
+
+for _ in 0..cycles {
+    chip8.Cycle();
+}
+
+let elapsed = start.elapsed();
+let cycles_per_sec = cycles as f64 / elapsed.as_secs_f64();
+
+println!("Speed: {:.0} cycles/sec", cycles_per_sec);
+println!("Time per cycle: {:.2} µs", elapsed.as_micros() as f64 / cycles as f64);
+```
+
+Typical performance: 1-10 million cycles/second (depends on optimization level).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Basic Usage" icon="book" href="/examples/basic-usage">
+    Learn the fundamentals of using CHIP8-rs
+  </Card>
+  <Card title="Custom Frontend" icon="palette" href="/examples/custom-frontend">
+    Build custom graphical frontends
+  </Card>
+</CardGroup>
+
+## Additional Resources
+
+- [CHIP-8 Opcode Reference](http://devernay.free.fr/hacks/chip8/C8TECH10.HTM)
+- [CHIP-8 Test Suite Repository](https://github.com/Timendus/chip8-test-suite)
+- [CHIP-8 Extensions and Variants](https://chip-8.github.io/extensions/)

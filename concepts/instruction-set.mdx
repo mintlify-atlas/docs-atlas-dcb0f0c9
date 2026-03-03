@@ -1,0 +1,464 @@
+---
+title: 'Instruction Set'
+description: 'Complete reference for CHIP-8 opcodes and instruction execution'
+---
+
+## Overview
+
+The CHIP-8 has 35+ opcodes, each 2 bytes long. Instructions are fetched from memory, decoded using function pointer tables, and executed in a single cycle.
+
+## Opcode Format
+
+CHIP-8 opcodes are 16-bit values with the following notation:
+
+- `nnn` or `addr` - 12-bit address
+- `kk` or `byte` - 8-bit constant
+- `n` or `nibble` - 4-bit constant
+- `x` and `y` - 4-bit register identifiers
+
+## Function Table Architecture
+
+The emulator uses function pointer tables for O(1) opcode dispatch (`src/chip8.rs:130-198`):
+
+```rust
+pub fn add_table(&mut self) {
+    let table: [fn(&mut Chip8); 0xF+1] = [
+        Chip8::Table0,   // 0x0000
+        Chip8::OP_1nnn,  // 0x1000
+        Chip8::OP_2nnn,  // 0x2000
+        Chip8::OP_3xkk,  // 0x3000
+        Chip8::OP_4xkk,  // 0x4000
+        Chip8::OP_5xy0,  // 0x5000
+        Chip8::OP_6xkk,  // 0x6000
+        Chip8::OP_7xkk,  // 0x7000
+        Chip8::Table8,   // 0x8000
+        Chip8::OP_9xy0,  // 0x9000
+        Chip8::OP_Annn,  // 0xA000
+        Chip8::OP_Bnnn,  // 0xB000
+        Chip8::OP_Cxkk,  // 0xC000
+        Chip8::OP_Dxyn,  // 0xD000
+        Chip8::TableE,   // 0xE000
+        Chip8::TableF    // 0xF000
+    ];
+    
+    // Sub-tables for 0x0, 0x8, 0xE, and 0xF prefixes
+    // ...
+}
+```
+
+<Info>
+The first nibble of the opcode determines which function or sub-table to use. This allows for efficient dispatch without large switch statements.
+</Info>
+
+## Instruction Categories
+
+### Display Instructions
+
+<AccordionGroup>
+  <Accordion title="00E0 - Clear Screen">
+    Clears the entire display buffer to black.
+    
+    ```rust
+    // src/chip8.rs:377-383
+    pub fn OP_00E0(&mut self) {
+        self.video = [0; 2048];
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Dxyn - Draw Sprite">
+    Draws an n-byte sprite at position (Vx, Vy). Sets VF to 1 if any pixels are erased (collision detection).
+    
+    ```rust
+    // src/chip8.rs:729-777
+    fn OP_Dxyn(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        let Vy = (self.op_code & 0x00F0) >> 4;
+        let height = self.op_code & 0x000F;
+        
+        let x_pos = self.registers[Vx as usize] % 64;
+        let y_pos = self.registers[Vy as usize] % 32;
+        
+        self.registers[0xF] = 0; // Reset collision flag
+        
+        for row in 0..height {
+            let sprite_byte = self.memory[(self.index_register + row) as usize];
+            
+            for col in 0..8 {
+                let sprite_pixel = sprite_byte & (0x80 >> col);
+                if sprite_pixel != 0 {
+                    let video_index = ((y_pos as u16 + row) * 64 
+                                     + x_pos as u16 + col) as usize;
+                    
+                    if self.video[video_index] == 0xFFFFFFFF {
+                        self.registers[0xF] = 1; // Collision detected
+                    }
+                    
+                    self.video[video_index] ^= 0xFFFFFFFF; // XOR pixel
+                }
+            }
+        }
+    }
+    ```
+    
+    <Note>
+    Drawing uses XOR operation, meaning drawing the same sprite twice erases it.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+### Flow Control
+
+<AccordionGroup>
+  <Accordion title="1nnn - Jump">
+    Sets program counter to address nnn.
+    
+    ```rust
+    // src/chip8.rs:398-406
+    fn OP_1nnn(&mut self) {
+        let address = self.op_code & 0x0FFF;
+        self.program_counter = address;
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="2nnn - Call Subroutine">
+    Pushes current PC to stack, then jumps to address nnn.
+    
+    ```rust
+    // src/chip8.rs:409-419
+    fn OP_2nnn(&mut self) {
+        let address = self.op_code & 0x0FFF;
+        
+        self.stack[self.stack_pointer as usize] = self.program_counter;
+        self.stack_pointer += 1;
+        self.program_counter = address;
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="00EE - Return">
+    Pops address from stack and sets PC to it.
+    
+    ```rust
+    // src/chip8.rs:387-394
+    fn OP_00EE(&mut self) {
+        self.stack_pointer -= 1;
+        self.program_counter = self.stack[self.stack_pointer as usize];
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Register Operations
+
+<AccordionGroup>
+  <Accordion title="6xkk - Set Register">
+    Sets register Vx to value kk.
+    
+    ```rust
+    // src/chip8.rs:485-502
+    fn OP_6xkk(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        let byte = (self.op_code & 0x00FF) as u8;
+        
+        self.registers[Vx as usize] = byte;
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="7xkk - Add to Register">
+    Adds value kk to register Vx (no carry flag).
+    
+    ```rust
+    // src/chip8.rs:507-517
+    fn OP_7xkk(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        let byte = self.op_code as u8 & 0xFF;
+        
+        self.registers[Vx as usize] = 
+            (((self.registers[Vx as usize] as u16) + byte as u16) % 256) as u8;
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="8xy0 - Set Vx = Vy">
+    Copies value from register Vy into Vx.
+    
+    ```rust
+    // src/chip8.rs:521-530
+    fn OP_8xy0(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        let Vy = (self.op_code & 0x00F0) >> 4;
+        
+        self.registers[Vx as usize] = self.registers[Vy as usize];
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Arithmetic & Logic
+
+<AccordionGroup>
+  <Accordion title="8xy4 - Add with Carry">
+    Adds Vy to Vx. Sets VF to 1 if there's a carry, 0 otherwise.
+    
+    ```rust
+    // src/chip8.rs:574-591
+    fn OP_8xy4(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        let Vy = (self.op_code & 0x00F0) >> 4;
+        
+        let sum = self.registers[Vx as usize] as u16 
+                + self.registers[Vy as usize] as u16;
+        
+        if sum > 255 {
+            self.registers[0xF] = 1;
+        } else {
+            self.registers[0xF] = 0;
+        }
+        
+        self.registers[Vx as usize] = (sum & 0xFF) as u8;
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="8xy1/2/3 - Bitwise Operations">
+    Performs OR, AND, or XOR on Vx and Vy.
+    
+    ```rust
+    fn OP_8xy1(&mut self) { // OR
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        let Vy = (self.op_code & 0x00F0) >> 4;
+        self.registers[Vx as usize] |= self.registers[Vy as usize];
+    }
+    
+    fn OP_8xy2(&mut self) { // AND
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        let Vy = (self.op_code & 0x00F0) >> 4;
+        self.registers[Vx as usize] &= self.registers[Vy as usize];
+    }
+    
+    fn OP_8xy3(&mut self) { // XOR
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        let Vy = (self.op_code & 0x00F0) >> 4;
+        self.registers[Vx as usize] ^= self.registers[Vy as usize];
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="8xy6/E - Shift Operations">
+    Shifts Vx right or left by 1. Stores shifted-out bit in VF.
+    
+    ```rust
+    // SHR - src/chip8.rs:618-629
+    fn OP_8xy6(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        
+        // Save LSB in VF
+        self.registers[0xF] = self.registers[Vx as usize] & 0x1;
+        self.registers[Vx as usize] >>= 1;
+    }
+    
+    // SHL - src/chip8.rs:656-667
+    fn OP_8xyE(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        
+        // Save MSB in VF
+        self.registers[0xF] = (self.registers[Vx as usize] & 0x80) >> 7;
+        self.registers[Vx as usize] <<= 1;
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Memory Operations
+
+<AccordionGroup>
+  <Accordion title="Annn - Set Index Register">
+    Sets the index register I to address nnn.
+    
+    ```rust
+    // src/chip8.rs:686-693
+    fn OP_Annn(&mut self) {
+        let address = self.op_code & 0x0FFF;
+        self.index_register = address;
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Fx55 - Store Registers">
+    Stores registers V0 through Vx in memory starting at address I.
+    
+    ```rust
+    // src/chip8.rs:934-944
+    fn OP_Fx55(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        
+        for i in 0..(Vx + 1) {
+            self.memory[(self.index_register + i) as usize] = 
+                self.registers[i as usize];
+        }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Fx65 - Load Registers">
+    Loads registers V0 through Vx from memory starting at address I.
+    
+    ```rust
+    // src/chip8.rs:948-958
+    fn OP_Fx65(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        
+        for i in 0..(Vx + 1) {
+            self.registers[i as usize] = 
+                self.memory[(self.index_register + i) as usize];
+        }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Input Operations
+
+<AccordionGroup>
+  <Accordion title="Ex9E - Skip if Key Pressed">
+    Skips the next instruction if the key in Vx is currently pressed.
+    
+    ```rust
+    // src/chip8.rs:781-791
+    fn OP_Ex9E(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        let key = self.registers[Vx as usize];
+        
+        if self.keypad[key as usize] != 0 {
+            self.program_counter += 2;
+        }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Fx0A - Wait for Key">
+    Waits for a key press, then stores the key value in Vx.
+    
+    ```rust
+    // src/chip8.rs:820-861
+    fn OP_Fx0A(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        
+        // Check all 16 keys
+        if self.keypad[0] != 0 {
+            self.registers[Vx as usize] = 0;
+        } else if self.keypad[1] != 0 {
+            self.registers[Vx as usize] = 1;
+        }
+        // ... (checks keys 2-15)
+        else {
+            // No key pressed - repeat this instruction
+            self.program_counter -= 2;
+        }
+    }
+    ```
+    
+    <Warning>
+    This is a blocking operation. The program counter is decremented to repeat the instruction until a key is pressed.
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+### Special Operations
+
+<AccordionGroup>
+  <Accordion title="Cxkk - Random Number">
+    Generates a random byte and ANDs it with kk, storing the result in Vx.
+    
+    ```rust
+    // src/chip8.rs:708-725
+    fn OP_Cxkk(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        let byte = (self.op_code & 0x00FF) as u8;
+        
+        self.registers[Vx as usize] = self.rand_byte() & byte;
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Fx33 - Binary-Coded Decimal">
+    Stores the BCD representation of Vx in memory at I, I+1, and I+2.
+    
+    ```rust
+    // src/chip8.rs:913-930
+    fn OP_Fx33(&mut self) {
+        let Vx = (self.op_code & 0x0F00) >> 8;
+        let mut value = self.registers[Vx as usize];
+        
+        // Ones place
+        self.memory[(self.index_register + 2) as usize] = value % 10;
+        value /= 10;
+        
+        // Tens place
+        self.memory[(self.index_register + 1) as usize] = value % 10;
+        value /= 10;
+        
+        // Hundreds place
+        self.memory[self.index_register as usize] = value % 10;
+    }
+    ```
+    
+    Example: If V5 contains 234, this stores 2 at I, 3 at I+1, and 4 at I+2.
+  </Accordion>
+</AccordionGroup>
+
+## Complete Instruction Table
+
+| Opcode | Mnemonic | Description |
+|--------|----------|-------------|
+| `00E0` | CLS | Clear display |
+| `00EE` | RET | Return from subroutine |
+| `1nnn` | JP addr | Jump to address |
+| `2nnn` | CALL addr | Call subroutine |
+| `3xkk` | SE Vx, byte | Skip if Vx == kk |
+| `4xkk` | SNE Vx, byte | Skip if Vx != kk |
+| `5xy0` | SE Vx, Vy | Skip if Vx == Vy |
+| `6xkk` | LD Vx, byte | Set Vx = kk |
+| `7xkk` | ADD Vx, byte | Set Vx = Vx + kk |
+| `8xy0` | LD Vx, Vy | Set Vx = Vy |
+| `8xy1` | OR Vx, Vy | Set Vx = Vx OR Vy |
+| `8xy2` | AND Vx, Vy | Set Vx = Vx AND Vy |
+| `8xy3` | XOR Vx, Vy | Set Vx = Vx XOR Vy |
+| `8xy4` | ADD Vx, Vy | Set Vx = Vx + Vy, VF = carry |
+| `8xy5` | SUB Vx, Vy | Set Vx = Vx - Vy, VF = NOT borrow |
+| `8xy6` | SHR Vx | Set Vx = Vx &gt;&gt; 1, VF = LSB |
+| `8xy7` | SUBN Vx, Vy | Set Vx = Vy - Vx, VF = NOT borrow |
+| `8xyE` | SHL Vx | Set Vx = Vx &lt;&lt; 1, VF = MSB |
+| `9xy0` | SNE Vx, Vy | Skip if Vx != Vy |
+| `Annn` | LD I, addr | Set I = nnn |
+| `Bnnn` | JP V0, addr | Jump to nnn + V0 |
+| `Cxkk` | RND Vx, byte | Set Vx = random AND kk |
+| `Dxyn` | DRW Vx, Vy, n | Draw sprite at (Vx, Vy) |
+| `Ex9E` | SKP Vx | Skip if key Vx is pressed |
+| `ExA1` | SKNP Vx | Skip if key Vx is not pressed |
+| `Fx07` | LD Vx, DT | Set Vx = delay timer |
+| `Fx0A` | LD Vx, K | Wait for key press, store in Vx |
+| `Fx15` | LD DT, Vx | Set delay timer = Vx |
+| `Fx18` | LD ST, Vx | Set sound timer = Vx |
+| `Fx1E` | ADD I, Vx | Set I = I + Vx |
+| `Fx29` | LD F, Vx | Set I = sprite location for digit Vx |
+| `Fx33` | LD B, Vx | Store BCD of Vx at I, I+1, I+2 |
+| `Fx55` | LD [I], Vx | Store V0-Vx in memory at I |
+| `Fx65` | LD Vx, [I] | Load V0-Vx from memory at I |
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="microchip" href="/concepts/chip8-architecture">
+    See how instructions fit into the execution cycle
+  </Card>
+  <Card title="Display System" icon="display" href="/concepts/display-system">
+    Learn more about the DRW instruction
+  </Card>
+  <Card title="Input Handling" icon="keyboard" href="/concepts/input-handling">
+    Understand key press detection
+  </Card>
+</CardGroup>

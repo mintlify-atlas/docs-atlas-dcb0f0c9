@@ -1,0 +1,179 @@
+---
+title: Basic Usage
+description: Complete working example showing how to create a CHIP-8 emulator instance, load a ROM, and run the emulation loop
+---
+
+This guide walks you through the basic usage of CHIP8-rs, from creating an emulator instance to running your first ROM.
+
+## Quick Start
+
+The most basic CHIP-8 emulator requires just three components:
+1. Create a `Chip8` instance
+2. Load a ROM file
+3. Run the execution cycle loop
+
+<Steps>
+
+### Create a Chip8 Instance
+
+First, create a new CHIP-8 emulator instance. The emulator is automatically initialized with:
+- All registers set to zero
+- Program counter at `0x200` (standard CHIP-8 start address)
+- Font data loaded into low memory
+- Empty video buffer (64×32 pixels)
+
+```rust
+use chip8_rs::chip8::Chip8;
+
+let mut chip8 = Chip8::new();
+```
+
+See [`chip8.rs:77`](/home/daytona/workspace/source/src/chip8.rs:77) for initialization details.
+
+### Load a ROM
+
+Load a ROM file from disk using `load_rom()`. The ROM data is loaded starting at memory address `0x200`:
+
+```rust
+use std::path::PathBuf;
+
+let rom_path = PathBuf::from("roms/test_opcode.ch8");
+chip8.load_rom(rom_path)?;
+```
+
+The `load_rom()` method performs a hard reset and loads the ROM bytes into memory. See [`chip8.rs:250`](/home/daytona/workspace/source/src/chip8.rs:250).
+
+<Note>
+  If the ROM file is too large to fit in memory (> ~3.5KB), `load_rom()` will return an error.
+</Note>
+
+### Run the Emulation Loop
+
+The core emulation loop calls `Cycle()` to execute one instruction, then sleeps to control the execution speed:
+
+```rust
+use std::{thread, time};
+
+let speed_ms: u64 = 10; // 10ms per instruction (~100 Hz)
+let cycle_wait_time = time::Duration::from_millis(speed_ms);
+
+loop {
+    // Execute one CHIP-8 instruction
+    chip8.Cycle();
+    
+    // Display the video buffer (terminal output)
+    chip8.pretty_print_video();
+    
+    // Control execution speed
+    thread::sleep(cycle_wait_time);
+}
+```
+
+The `Cycle()` method ([`chip8.rs:1006`](/home/daytona/workspace/source/src/chip8.rs:1006)):
+1. Fetches the next opcode from memory
+2. Increments the program counter
+3. Decodes and executes the instruction
+4. Decrements delay and sound timers
+
+</Steps>
+
+## Complete Example
+
+Here's a minimal working emulator combining all the steps:
+
+```rust
+use chip8_rs::chip8::Chip8;
+use std::path::PathBuf;
+use std::{thread, time};
+
+fn main() -> Result<(), std::io::Error> {
+    // Create emulator instance
+    let mut chip8 = Chip8::new();
+    
+    // Load ROM
+    let rom_path = PathBuf::from("roms/IBM-Logo.ch8");
+    chip8.load_rom(rom_path)?;
+    
+    // Execution loop
+    let speed_ms: u64 = 10;
+    let cycle_wait_time = time::Duration::from_millis(speed_ms);
+    
+    loop {
+        chip8.Cycle();
+        chip8.pretty_print_video();
+        thread::sleep(cycle_wait_time);
+    }
+}
+```
+
+## Controlling Speed
+
+The execution speed is controlled by the sleep duration between cycles. Typical values:
+
+| Speed (ms) | Frequency | Use Case |
+|------------|-----------|----------|
+| 1-2 ms     | 500-1000 Hz | Fast, smooth gameplay |
+| 10 ms      | 100 Hz    | Standard CHIP-8 speed |
+| 16-17 ms   | ~60 Hz    | Slower, easier to debug |
+| 30+ ms     | &lt;33 Hz    | Very slow, step-through debugging |
+
+## Accessing the Video Buffer
+
+The video buffer is a public field containing 2048 pixels (64×32):
+
+```rust
+// Access raw video data
+let video: &[u32; 64 * 32] = &chip8.video;
+
+// Check if pixel at (x, y) is on
+let x = 32;
+let y = 16;
+let pixel_on = video[y * 64 + x] == 0xFFFFFFFF;
+```
+
+Pixels are stored as `u32` values:
+- `0xFFFFFFFF` = pixel ON (white)
+- `0x00000000` = pixel OFF (black)
+
+## Handling Input
+
+CHIP-8 has a 16-key hexadecimal keypad. Set key states using the public `keypad` field:
+
+```rust
+// Key layout: 0-9, A-F (indices 0x0 to 0xF)
+chip8.keypad[0x5] = 1; // Key '5' pressed
+chip8.keypad[0xA] = 0; // Key 'A' released
+```
+
+For edge detection (press/release events), use the key methods:
+
+```rust
+chip8.key_down(0x5);  // Register key press
+chip8.key_up(0x5);    // Register key release
+```
+
+See the [CLI implementation](/home/daytona/workspace/source/src/bin/cli.rs) for a complete input handling example using crossterm.
+
+## Debug Mode
+
+Enable debug mode to print opcode information to stderr:
+
+```rust
+chip8.debug(); // Toggle debug mode on
+```
+
+This will print:
+- Each opcode being executed
+- Table lookups
+- Font loading status
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Custom Frontend" icon="palette" href="/examples/custom-frontend">
+    Build a custom graphical frontend with SDL, OpenGL, or WebAssembly
+  </Card>
+  <Card title="ROM Testing" icon="flask" href="/examples/rom-testing">
+    Test your emulator with standard CHIP-8 test ROMs
+  </Card>
+</CardGroup>

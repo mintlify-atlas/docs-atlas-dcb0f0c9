@@ -1,0 +1,294 @@
+---
+title: CLI Usage
+description: Running the CHIP-8 emulator from the command line
+---
+
+CHIP8-rs includes a terminal-based emulator built with `ratatui` that provides a full-featured interface for running CHIP-8 ROMs.
+
+## Installation
+
+Build the CLI binary with the `cli` feature enabled:
+
+```bash
+cargo build --release --features cli
+```
+
+The binary will be located at `target/release/cli` (or `cli.exe` on Windows).
+
+## Command-Line Arguments
+
+The CLI accepts the following arguments:
+
+```bash
+cli [OPTIONS] --rom <ROM>
+```
+
+### Required Arguments
+
+<ParamField path="--rom" type="string" required>
+  Path to the CHIP-8 ROM file to load
+  
+  ```bash
+  cli --rom roms/pong.ch8
+  ```
+  
+  Short form: `-r`
+  
+  ```bash
+  cli -r roms/pong.ch8
+  ```
+</ParamField>
+
+### Optional Arguments
+
+<ParamField path="--debug" type="flag">
+  Activate debug mode, showing opcode tracing and logs
+  
+  ```bash
+  cli --rom roms/test.ch8 --debug
+  ```
+  
+  Short form: `-d`
+  
+  ```bash
+  cli -r roms/test.ch8 -d
+  ```
+</ParamField>
+
+<ParamField path="--clock" type="integer" default="10">
+  Set the speed in milliseconds per cycle
+  
+  ```bash
+  cli --rom roms/pong.ch8 --clock 5
+  ```
+  
+  Short form: `-c`
+  
+  Lower values = faster execution. The default of `10ms` gives approximately 100 Hz.
+  
+  ```bash
+  cli -r roms/pong.ch8 -c 20  # Slower: 50 Hz
+  cli -r roms/pong.ch8 -c 2   # Faster: 500 Hz
+  ```
+</ParamField>
+
+## Usage Examples
+
+<CodeGroup>
+```bash Basic Usage
+# Run a ROM with default settings (10ms per cycle)
+cli --rom roms/test_opcode.ch8
+```
+
+```bash Debug Mode
+# Run with debug information displayed
+cli --rom roms/pong.ch8 --debug
+```
+
+```bash Custom Speed
+# Run at 5ms per cycle (~200 Hz)
+cli --rom roms/invaders.ch8 --clock 5
+```
+
+```bash All Options
+# Debug mode with custom speed
+cli -r roms/game.ch8 -d -c 8
+```
+</CodeGroup>
+
+## Keyboard Mapping
+
+The CHIP-8 has a 16-key hexadecimal keypad (0-F). The CLI maps these to your keyboard as follows:
+
+<Note>
+The original CHIP-8 keypad layout:
+```
+1 2 3 C
+4 5 6 D
+7 8 9 E
+A 0 B F
+```
+</Note>
+
+### Keyboard Layout
+
+<CodeGroup>
+```text Modern Keyboard
+1 2 3 4
+Q W E R
+A S D F
+Z X C V
+```
+
+```text CHIP-8 Keys
+1 2 3 C
+4 5 6 D
+7 8 9 E
+A 0 B F
+```
+</CodeGroup>
+
+### Key Mapping Table
+
+| Keyboard Key | CHIP-8 Key |
+|--------------|------------|
+| 1            | 0x1        |
+| 2            | 0x2        |
+| 3            | 0x3        |
+| 4            | 0xC        |
+| Q            | 0x4        |
+| W            | 0x5        |
+| E            | 0x6        |
+| R            | 0xD        |
+| A            | 0x7        |
+| S            | 0x8        |
+| D            | 0x9        |
+| F            | 0xE        |
+| Z            | 0xA        |
+| X            | 0x0        |
+| C            | 0xB        |
+| V            | 0xF        |
+
+### Special Keys
+
+<ResponseField name="Esc" type="key">
+  Exit the emulator
+</ResponseField>
+
+<ResponseField name="Q" type="key">
+  Exit the emulator (same as Esc)
+</ResponseField>
+
+## Display Modes
+
+The CLI provides two display modes depending on whether debug mode is enabled.
+
+### Normal Mode
+
+Without `--debug`, the emulator displays the CHIP-8 screen in fullscreen mode:
+
+```bash
+cli --rom roms/pong.ch8
+```
+
+- Clean, distraction-free display
+- 64×32 pixel screen scaled to fit your terminal
+- White pixels on black background
+
+### Debug Mode
+
+With `--debug`, the interface shows additional information:
+
+```bash
+cli --rom roms/pong.ch8 --debug
+```
+
+The debug layout includes:
+
+<Steps>
+  <Step title="CHIP-8 Screen (left)">
+    The emulator display scaled to fit the available space
+  </Step>
+  
+  <Step title="Event Log (right)">
+    Shows keypress events and system messages
+  </Step>
+  
+  <Step title="Status Bar (bottom)">
+    Displays:
+    - Current opcode in hexadecimal format
+    - Current speed in Hz
+    - Exit instructions
+  </Step>
+</Steps>
+
+Example status bar output:
+```
+opcode: A23E    quit: Esc or Q    Speed: 64 Hz
+```
+
+## Terminal Output Example
+
+<Tip>
+For best results, use a terminal with:
+- Unicode support
+- At least 80×24 character size (larger is better)
+- Monospace font
+</Tip>
+
+When running without debug mode, you'll see output similar to:
+
+```
+████████  ████    ████████
+██    ██  ██      ██    ██
+████████  ████    ████████
+██        ██      ██
+██        ████    ██
+```
+
+## Performance Tips
+
+<AccordionGroup>
+  <Accordion title="Adjust clock speed for different ROMs">
+    Some ROMs run better at different speeds. Start with the default `10ms` and adjust:
+    
+    ```bash
+    # Too slow?
+    cli -r rom.ch8 -c 5
+    
+    # Too fast?
+    cli -r rom.ch8 -c 20
+    ```
+  </Accordion>
+  
+  <Accordion title="Use a larger terminal window">
+    The display scales better with more terminal space. For the best experience:
+    - Fullscreen your terminal
+    - Use a terminal emulator with good Unicode rendering (e.g., Alacritty, Kitty, iTerm2)
+  </Accordion>
+  
+  <Accordion title="Disable debug mode for better performance">
+    Debug mode adds overhead for logging. For smoother gameplay:
+    
+    ```bash
+    cli -r rom.ch8 -c 5  # No --debug flag
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<Warning>
+If you see "Feature 'cli' is not enabled" errors, rebuild with:
+```bash
+cargo build --release --features cli
+```
+</Warning>
+
+### Common Issues
+
+**Display looks garbled**
+- Ensure your terminal supports Unicode
+- Try a different terminal emulator
+- Increase terminal size
+
+**Keys not responding**
+- Make sure the terminal window has focus
+- Check that you're using the correct key mapping (see table above)
+- Try uppercase/lowercase variants (both should work)
+
+**ROM won't load**
+- Verify the file path is correct
+- Ensure the ROM file has read permissions
+- Check that the file is a valid CHIP-8 ROM (typically `.ch8` extension)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Debug Mode" icon="bug" href="/guides/debug-mode">
+    Learn about debug features and opcode tracing
+  </Card>
+  <Card title="Loading ROMs" icon="file" href="/guides/loading-roms">
+    Different ways to load ROM files
+  </Card>
+</CardGroup>

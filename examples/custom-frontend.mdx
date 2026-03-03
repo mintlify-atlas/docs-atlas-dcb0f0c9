@@ -1,0 +1,474 @@
+---
+title: Custom Frontend
+description: Learn how to build custom frontends for CHIP-8 emulation, including terminal UIs, native graphics, and WebAssembly
+---
+
+CHIP8-rs is designed to be frontend-agnostic. This guide shows how to build custom frontends by interfacing with the core emulator.
+
+## Architecture Overview
+
+The CHIP-8 core (`chip8.rs`) provides:
+- **Video buffer**: `[u32; 64 * 32]` array (public field)
+- **Keypad state**: `[u8; 16]` array (public field)
+- **Execution method**: `Cycle()` runs one instruction
+- **ROM loading**: `load_rom()` and `reset_and_load_bytes()`
+
+Your frontend is responsible for:
+1. Rendering the video buffer to screen
+2. Capturing input and updating keypad state
+3. Controlling the execution loop timing
+4. Handling sound (when `sound_timer > 0`)
+
+## Example 1: Terminal UI (CLI)
+
+The CLI frontend ([`src/bin/cli.rs`](/home/daytona/workspace/source/src/bin/cli.rs)) uses `ratatui` and `crossterm` for a terminal-based interface.
+
+<Steps>
+
+### Set Up Terminal
+
+Initialize the terminal for raw mode and alternate screen:
+
+```rust
+use ratatui::{
+    backend::CrosstermBackend,
+    Terminal,
+};
+use ratatui::crossterm::{
+    execute,
+    terminal::{enable_raw_mode, EnterAlternateScreen},
+};
+use std::io;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Enable raw mode for immediate key input
+    enable_raw_mode()?;
+    
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+    
+    // ... emulation loop ...
+    
+    Ok(())
+}
+```
+
+### Create Custom Widget
+
+Implement a `Widget` to render the CHIP-8 video buffer:
+
+```rust
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Color, Style},
+    widgets::Widget,
+};
+
+pub struct Chip8Screen<'a> {
+    pub video: &'a [u32; 64 * 32],
+    pub on: Color,
+    pub off: Color,
+}
+
+impl<'a> Widget for Chip8Screen<'a> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 { return; }
+        
+        for ty in 0..area.height {
+            let sy = (ty as u32 * 32) / area.height as u32;
+            for tx in 0..area.width {
+                let sx = (tx as u32 * 64) / area.width as u32;
+                let idx = (sy * 64 + sx) as usize;
+                let pixel_on = self.video[idx] != 0;
+                
+                let cell = &mut buf[(area.x + tx, area.y + ty)];
+                cell.set_symbol(" ");
+                cell.set_style(Style::default().bg(
+                    if pixel_on { self.on } else { self.off }
+                ));
+            }
+        }
+    }
+}
+```
+
+See full implementation at [`platform.rs:85-107`](/home/daytona/workspace/source/src/platform.rs:85).
+
+### Handle Keyboard Input
+
+Map keyboard keys to CHIP-8 keypad:
+
+```rust
+use ratatui::crossterm::event::{self, Event, KeyCode};
+
+fn map_key_to_chip8(code: KeyCode) -> Option<u8> {
+    use KeyCode::*;
+    match code {
+        // Map keyboard to hex keypad layout:
+        // 1 2 3 4     ->  1 2 3 C
+        // Q W E R     ->  4 5 6 D
+        // A S D F     ->  7 8 9 E  
+        // Z X C V     ->  A 0 B F
+        Char('1') => Some(0x1),
+        Char('2') => Some(0x2),
+        Char('3') => Some(0x3),
+        Char('4') => Some(0xC),
+        Char('q') | Char('Q') => Some(0x4),
+        Char('w') | Char('W') => Some(0x5),
+        // ... (see platform.rs:17-46 for full mapping)
+        _ => None,
+    }
+}
+
+// In your event loop:
+while event::poll(Duration::from_millis(0))? {
+    if let Event::Key(key_event) = event::read()? {
+        if let Some(k) = map_key_to_chip8(key_event.code) {
+            chip8.key_down(k);
+        }
+    }
+}
+```
+
+### Render Loop
+
+Combine everything in the main loop:
+
+```rust
+use chip8_rs::chip8::Chip8;
+use std::{thread, time};
+
+let mut chip8 = Chip8::new();
+chip8.load_rom(rom_path)?;
+
+let speed_ms = 10;
+
+loop {
+    // Execute one cycle
+    chip8.Cycle();
+    
+    // Poll and handle input
+    let mut frame_keys = [0u8; 16];
+    // ... poll input, update frame_keys ...
+    chip8.keypad = frame_keys;
+    
+    // Render
+    terminal.draw(|f| {
+        let area = f.area();
+        f.render_widget(
+            Chip8Screen { 
+                video: &chip8.video, 
+                on: Color::White, 
+                off: Color::Black 
+            },
+            area,
+        );
+    })?;
+    
+    thread::sleep(time::Duration::from_millis(speed_ms));
+}
+```
+
+</Steps>
+
+## Example 2: WebAssembly Frontend
+
+The web frontend ([`platform_web.rs`](/home/daytona/workspace/source/src/platform_web.rs)) uses `wasm-bindgen` to run CHIP-8 in the browser.
+
+<Steps>
+
+### Define Global State
+
+Use thread-local storage for the emulator instance:
+
+```rust
+use std::cell::{RefCell, Cell};
+use wasm_bindgen::prelude::*;
+use web_sys::{HtmlCanvasElement, CanvasRenderingContext2d};
+use crate::chip8::Chip8;
+
+thread_local! {
+    static EMU: RefCell<Emu> = RefCell::new(Emu::new_uninit());
+}
+
+struct Emu {
+    chip8: Chip8,
+    canvas: HtmlCanvasElement,
+    ctx: CanvasRenderingContext2d,
+    loaded: bool,
+    running: bool,
+    delay_ms: u32,
+}
+```
+
+See [`platform_web.rs:8-23`](/home/daytona/workspace/source/src/platform_web.rs:8).
+
+### Initialize Canvas
+
+Expose an initialization function to JavaScript:
+
+```rust
+use wasm_bindgen::JsCast;
+use web_sys::window;
+
+#[wasm_bindgen]
+pub fn init(canvas_id: &str) -> Result<(), JsValue> {
+    let doc = window()
+        .ok_or("no window")?
+        .document()
+        .ok_or("no document")?;
+    
+    let canvas: HtmlCanvasElement = doc
+        .get_element_by_id(canvas_id)
+        .ok_or("canvas not found")?
+        .dyn_into()?;
+    
+    let ctx: CanvasRenderingContext2d = canvas
+        .get_context("2d")?
+        .unwrap()
+        .dyn_into()?;
+    
+    EMU.with(|cell| {
+        let mut emu = cell.borrow_mut();
+        emu.canvas = canvas;
+        emu.ctx = ctx;
+        emu.present(); // Initial render
+    });
+    
+    Ok(())
+}
+```
+
+### Render to Canvas
+
+Implement a `present()` method to draw the video buffer:
+
+```rust
+impl Emu {
+    fn present(&self) {
+        let w = self.canvas.width() as f64;
+        let h = self.canvas.height() as f64;
+        let cols = 64f64;
+        let rows = 32f64;
+        let pw = (w / cols).floor();
+        let ph = (h / rows).floor();
+        
+        // Clear screen
+        self.ctx.set_fill_style(&"#000".into());
+        self.ctx.fill_rect(0.0, 0.0, w, h);
+        
+        // Draw pixels
+        self.ctx.set_fill_style(&"#2182ff".into());
+        let fb = &self.chip8.video;
+        
+        for y in 0..32 {
+            for x in 0..64 {
+                if fb[y * 64 + x] != 0 {
+                    let xf = (x as f64) * pw;
+                    let yf = (y as f64) * ph;
+                    self.ctx.fill_rect(xf, yf, pw, ph);
+                }
+            }
+        }
+    }
+}
+```
+
+See [`platform_web.rs:58-84`](/home/daytona/workspace/source/src/platform_web.rs:58).
+
+### Export Control Functions
+
+Provide JavaScript bindings for emulator control:
+
+```rust
+#[wasm_bindgen]
+pub fn load_rom(bytes: &[u8]) -> Result<(), JsValue> {
+    EMU.with(|cell| {
+        let mut emu = cell.borrow_mut();
+        emu.chip8.reset_and_load_bytes(bytes)
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))?;
+        emu.loaded = true;
+        emu.present();
+        Ok(())
+    })
+}
+
+#[wasm_bindgen]
+pub fn step(n: u32) {
+    EMU.with(|cell| {
+        let mut emu = cell.borrow_mut();
+        for _ in 0..n {
+            if !emu.loaded { break; }
+            emu.chip8.Cycle();
+            emu.present();
+        }
+    });
+}
+
+#[wasm_bindgen]
+pub fn set_running(run: bool) {
+    EMU.with(|cell| cell.borrow_mut().running = run);
+}
+
+#[wasm_bindgen]
+pub fn set_key(idx: u8, down: bool) {
+    if idx >= 16 { return; }
+    // ... handle key state ...
+}
+```
+
+### HTML Integration
+
+Use the WASM module from JavaScript:
+
+```html
+<canvas id="screen" width="640" height="320"></canvas>
+
+<script type="module">
+  import init, { 
+    init as wasmInit,
+    load_rom,
+    step,
+    set_running,
+    set_key 
+  } from './pkg/chip8_rs.js';
+  
+  await init();
+  await wasmInit("screen");
+  
+  // Load ROM from URL
+  const res = await fetch('./roms/test_opcode.ch8');
+  const rom = new Uint8Array(await res.arrayBuffer());
+  load_rom(rom);
+  
+  // Run emulator
+  set_running(true);
+  
+  // Set up keyboard input
+  window.addEventListener('keydown', (e) => {
+    const keyMap = {
+      '1': 0x1, '2': 0x2, '3': 0x3, '4': 0xC,
+      'q': 0x4, 'w': 0x5, 'e': 0x6, 'r': 0xD,
+      // ... etc
+    };
+    if (keyMap[e.key]) {
+      e.preventDefault();
+      set_key(keyMap[e.key], true);
+    }
+  });
+</script>
+```
+
+See the complete implementation in [`index.html`](/home/daytona/workspace/source/index.html:156).
+
+</Steps>
+
+## Video Buffer Access Patterns
+
+### Reading Individual Pixels
+
+```rust
+fn get_pixel(video: &[u32; 64 * 32], x: usize, y: usize) -> bool {
+    if x >= 64 || y >= 32 { return false; }
+    video[y * 64 + x] == 0xFFFFFFFF
+}
+```
+
+### Iterating All Pixels
+
+```rust
+for y in 0..32 {
+    for x in 0..64 {
+        let pixel_on = chip8.video[y * 64 + x] != 0;
+        // ... render pixel ...
+    }
+}
+```
+
+### Scaling to Different Resolutions
+
+```rust
+// Scale 64×32 to target resolution
+let target_width = 640;
+let target_height = 320;
+let scale_x = target_width / 64;
+let scale_y = target_height / 32;
+
+for y in 0..32 {
+    for x in 0..64 {
+        if chip8.video[y * 64 + x] != 0 {
+            // Draw scaled rectangle
+            let screen_x = x * scale_x;
+            let screen_y = y * scale_y;
+            // ... draw rectangle at (screen_x, screen_y, scale_x, scale_y) ...
+        }
+    }
+}
+```
+
+## Key Handling Best Practices
+
+### Edge Detection
+
+For proper key press detection (required by opcode `FX0A`), use the edge detection methods:
+
+```rust
+// On key press event:
+chip8.key_down(key_idx);
+
+// On key release event:
+chip8.key_up(key_idx);
+
+// The emulator tracks press edges internally
+if let Some(key) = chip8.take_recent_press() {
+    println!("Key {:X} was pressed", key);
+}
+```
+
+### Continuous State
+
+For checking if a key is currently held (opcodes `EX9E`, `EXA1`):
+
+```rust
+// Update keypad state each frame
+chip8.keypad[0x5] = if key_5_pressed { 1 } else { 0 };
+
+// Or check state
+if chip8.is_key_down(0x5) {
+    println!("Key 5 is held");
+}
+```
+
+## Sound Implementation
+
+CHIP-8 has a sound timer. When `sound_timer > 0`, play a beep:
+
+```rust
+// Check sound timer (decremented automatically in Cycle())
+let should_beep = chip8.sound_timer > 0;
+
+if should_beep {
+    // Play your beep sound
+    // (implementation depends on audio library)
+}
+```
+
+<Note>
+  The sound timer is decremented automatically during `Cycle()` at 60 Hz (every ~16ms of emulated time).
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Basic Usage" icon="book" href="/examples/basic-usage">
+    Learn the fundamentals of using CHIP8-rs
+  </Card>
+  <Card title="ROM Testing" icon="flask" href="/examples/rom-testing">
+    Test your frontend with standard CHIP-8 test ROMs
+  </Card>
+</CardGroup>

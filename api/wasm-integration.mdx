@@ -1,0 +1,487 @@
+---
+title: 'WASM Integration'
+description: 'Guide to integrating CHIP-8 WASM in web applications'
+icon: 'browser'
+---
+
+## Overview
+
+This guide shows how to integrate the CHIP-8 emulator into a web application using the WebAssembly module built with `wasm-pack`. All examples are taken from the production implementation in `index.html`.
+
+## Building for Web
+
+### Prerequisites
+
+The WASM build requires the `web` feature enabled in `Cargo.toml`:
+
+```toml
+[features]
+web = ["dep:wasm-bindgen", "dep:web-sys", "dep:js-sys", "dep:console_error_panic_hook"]
+```
+
+### Build Command
+
+```bash
+wasm-pack build --target web --features web
+```
+
+This generates a `pkg/` directory with:
+- `chip8_rs.js` - JavaScript module
+- `chip8_rs_bg.wasm` - WebAssembly binary
+- `chip8_rs.d.ts` - TypeScript definitions
+
+---
+
+## Module Import
+
+### ES Module Import
+
+Import the WASM module as an ES module:
+
+```javascript
+const mod = await import('./pkg/chip8_rs.js');
+const {
+  default: init,        // WASM initializer
+  init: wasmInit,       // Canvas binding
+  load_rom,
+  reset,
+  set_key,
+  step,
+  set_running,
+  set_delay_ms,
+} = mod;
+```
+
+### Initialization Sequence
+
+```javascript
+// 1. Initialize WASM module
+await init();
+
+// 2. Bind to canvas element
+await wasmInit('screen');
+```
+
+<Tip>
+The module exports two `init` functions: the default export initializes the WASM module, while the named `init` export (aliased as `wasmInit` above) binds the emulator to a canvas element.
+</Tip>
+
+---
+
+## Canvas Setup
+
+The emulator renders to an HTML canvas with 64×32 CHIP-8 resolution.
+
+### HTML Canvas
+
+```html
+<canvas id="screen" width="640" height="320"></canvas>
+```
+
+### CSS Styling
+
+```css
+#screen {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 2 / 1;      /* Maintain 64:32 ratio */
+  image-rendering: pixelated; /* Sharp pixel scaling */
+  border-radius: 10px;
+}
+```
+
+### Responsive Scaling
+
+Maintain crisp rendering at different screen sizes:
+
+```javascript
+const fitCanvasToCss = () => {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width  * dpr));
+  const h = Math.max(1, Math.round(rect.height * dpr));
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+};
+
+new ResizeObserver(fitCanvasToCss).observe(canvas);
+window.addEventListener('orientationchange', fitCanvasToCss);
+fitCanvasToCss();
+```
+
+---
+
+## Loading ROMs
+
+### From URL (with CORS)
+
+```javascript
+const loadFromUrl = async (url) => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  await load_rom(buf);
+};
+
+// Usage
+await loadFromUrl('./roms/test_opcode.ch8');
+```
+
+### From File Input
+
+```html
+<input id="rom-file" type="file" accept=".ch8,.rom" />
+```
+
+```javascript
+document.getElementById('rom-file')?.addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  
+  const buf = new Uint8Array(await file.arrayBuffer());
+  await load_rom(buf);
+  
+  e.target.value = ''; // Allow reloading same file
+});
+```
+
+### Load and Pause Pattern
+
+Recommended pattern for loading ROMs:
+
+```javascript
+const pauseAndLoadUrl = async (url, label = 'ROM') => {
+  // Stop execution
+  set_running(false);
+  
+  // Fetch and load
+  const res = await fetch(url);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  await load_rom(buf);
+  
+  console.log(`${label} loaded (paused)`);
+};
+```
+
+---
+
+## Execution Control
+
+### Play/Pause Toggle
+
+```javascript
+let running = false;
+
+const runBtn = document.createElement('button');
+runBtn.textContent = 'Run';
+runBtn.onclick = () => {
+  set_running(true);
+  running = true;
+};
+
+const pauseBtn = document.createElement('button');
+pauseBtn.textContent = 'Pause';
+pauseBtn.onclick = () => {
+  set_running(false);
+  running = false;
+};
+```
+
+### Manual Stepping
+
+```javascript
+// Step 1 instruction
+step(1);
+
+// Step 10 instructions
+step(10);
+
+// Step 100 instructions
+step(100);
+```
+
+### Keyboard Shortcuts
+
+```javascript
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return; // Prevent key repeat
+  
+  // Space = step 1 (Shift+Space = step 10)
+  if (e.code === 'Space') {
+    e.preventDefault();
+    step(e.shiftKey ? 10 : 1);
+    return;
+  }
+  
+  // P = toggle run/pause
+  if (e.code === 'KeyP') {
+    e.preventDefault();
+    running = !running;
+    set_running(running);
+    return;
+  }
+});
+```
+
+### Speed Control
+
+```javascript
+let delayMs = 12; // Default ~250 Hz
+
+// Slower
+delayMs = Math.min(1000, delayMs + 2);
+set_delay_ms(delayMs);
+
+// Faster
+delayMs = Math.max(1, delayMs - 2);
+set_delay_ms(delayMs);
+```
+
+---
+
+## Input Mapping
+
+### Keyboard to CHIP-8 Keypad
+
+Map keyboard keys to CHIP-8's hexadecimal keypad:
+
+```javascript
+const codeToIdx = {
+  'Digit1': 0x1, 'Digit2': 0x2, 'Digit3': 0x3, 'Digit4': 0xC,
+  'KeyQ':   0x4, 'KeyW':   0x5, 'KeyE':   0x6, 'KeyR':   0xD,
+  'KeyA':   0x7, 'KeyS':   0x8, 'KeyD':   0x9, 'KeyF':   0xE,
+  'KeyZ':   0xA, 'KeyX':   0x0, 'KeyC':   0xB, 'KeyV':   0xF,
+};
+
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return; // Prevent double triggers
+  
+  const idx = codeToIdx[e.code];
+  if (idx === undefined) return;
+  
+  e.preventDefault();
+  set_key(idx, true);
+});
+
+window.addEventListener('keyup', (e) => {
+  const idx = codeToIdx[e.code];
+  if (idx === undefined) return;
+  
+  e.preventDefault();
+  set_key(idx, false);
+});
+```
+
+### Touch/Mouse Keypad
+
+On-screen keypad using pointer events:
+
+```javascript
+const keys = [
+  { label: '1', idx: 0x1 }, { label: '2', idx: 0x2 },
+  { label: '3', idx: 0x3 }, { label: '4', idx: 0xC },
+  { label: 'Q', idx: 0x4 }, { label: 'W', idx: 0x5 },
+  // ... full keypad
+];
+
+keys.forEach(k => {
+  const button = document.createElement('div');
+  button.className = 'key';
+  button.textContent = k.label;
+  
+  button.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    button.setPointerCapture?.(e.pointerId);
+    button.classList.add('pressed');
+    set_key(k.idx, true);
+  });
+  
+  button.addEventListener('pointerup', (e) => {
+    e.preventDefault();
+    button.classList.remove('pressed');
+    set_key(k.idx, false);
+  });
+  
+  button.addEventListener('pointercancel', (e) => {
+    e.preventDefault();
+    button.classList.remove('pressed');
+    set_key(k.idx, false);
+  });
+  
+  keypad.appendChild(button);
+});
+```
+
+<Warning>
+Use `pointerdown`/`pointerup` instead of `mousedown`/`mouseup` for better touch device support. Prevent default to avoid synthesized click events.
+</Warning>
+
+---
+
+## Complete Example
+
+Minimal working integration:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>CHIP-8 WASM</title>
+  <style>
+    #screen {
+      display: block;
+      width: 640px;
+      height: 320px;
+      image-rendering: pixelated;
+      border: 1px solid #333;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="screen" width="640" height="320"></canvas>
+  <div>
+    <button id="load">Load ROM</button>
+    <button id="run">Run</button>
+    <button id="pause">Pause</button>
+    <button id="step">Step</button>
+    <input id="file" type="file" accept=".ch8" />
+  </div>
+
+  <script type="module">
+    import init, {
+      init as wasmInit,
+      load_rom,
+      set_running,
+      step,
+    } from './pkg/chip8_rs.js';
+
+    // Initialize
+    await init();
+    await wasmInit('screen');
+
+    // Controls
+    document.getElementById('run').onclick = () => set_running(true);
+    document.getElementById('pause').onclick = () => set_running(false);
+    document.getElementById('step').onclick = () => step(1);
+
+    // File loader
+    document.getElementById('file').onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      await load_rom(bytes);
+    };
+
+    // Keyboard
+    const keyMap = {
+      'KeyX': 0x0, 'Digit1': 0x1, 'Digit2': 0x2, 'Digit3': 0x3,
+      'KeyQ': 0x4, 'KeyW': 0x5, 'KeyE': 0x6, 'KeyA': 0x7,
+      'KeyS': 0x8, 'KeyD': 0x9, 'KeyZ': 0xA, 'KeyC': 0xB,
+      'Digit4': 0xC, 'KeyR': 0xD, 'KeyF': 0xE, 'KeyV': 0xF,
+    };
+
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      const idx = keyMap[e.code];
+      if (idx !== undefined) {
+        e.preventDefault();
+        set_key(idx, true);
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      const idx = keyMap[e.code];
+      if (idx !== undefined) {
+        e.preventDefault();
+        set_key(idx, false);
+      }
+    });
+  </script>
+</body>
+</html>
+```
+
+---
+
+## Best Practices
+
+### Error Handling
+
+Handle WASM initialization and ROM loading errors:
+
+```javascript
+try {
+  await init();
+  await wasmInit('screen');
+} catch (e) {
+  console.error('WASM init failed:', e);
+  alert('Failed to initialize emulator');
+}
+```
+
+### Debouncing User Input
+
+Prevent accidental double-clicks:
+
+```javascript
+const debounce = (fn, ms = 120) => {
+  let lastCall = 0;
+  return (...args) => {
+    const now = performance.now();
+    if (now - lastCall < ms) return;
+    lastCall = now;
+    fn(...args);
+  };
+};
+
+runBtn.onclick = debounce(() => set_running(true));
+```
+
+### Preventing Key Repeat
+
+Always check `e.repeat` to prevent duplicate key events:
+
+```javascript
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return; // Critical for accurate input
+  // ... handle key
+});
+```
+
+### CORS for ROM Loading
+
+When loading ROMs from URLs, ensure CORS headers are set:
+
+```
+Access-Control-Allow-Origin: *
+```
+
+Or serve ROMs from the same origin as the HTML page.
+
+---
+
+## Production Example
+
+The complete production implementation is available in `index.html:156-380`, featuring:
+
+- Responsive canvas scaling
+- Multiple ROM loading methods (URL, preset, file)
+- Keyboard and on-screen keypad
+- Play/pause/step controls
+- Speed adjustment
+- Auto-load with URL parameters
+- Debounced controls
+- Error handling and user feedback
+
+## Source Code References
+
+- WASM exports: `src/platform_web.rs:97-209`
+- JavaScript integration: `index.html:156-380`
+- Web feature dependencies: `Cargo.toml:14,38-64`

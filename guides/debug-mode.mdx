@@ -1,0 +1,430 @@
+---
+title: Debug Mode
+description: Enable opcode tracing and debug logging to troubleshoot ROM execution
+---
+
+CHIP8-rs includes built-in debug mode that logs detailed execution information, helping you understand what your emulator is doing and troubleshoot ROM compatibility issues.
+
+## Enabling Debug Mode
+
+Debug mode can be enabled programmatically or via the CLI.
+
+### In Code
+
+Call the `debug()` method to toggle debug mode:
+
+```rust
+use chip8_rs::chip8::Chip8;
+
+let mut chip8 = Chip8::new();
+chip8.debug(); // Enable debug mode
+```
+
+**Signature:**
+```rust
+pub fn debug(&mut self)
+```
+
+**Behavior:**
+- Toggles debug mode on/off using XOR (`^= true`)
+- Prints "Debug mode activated" to stderr when enabled
+- Can be called multiple times to toggle
+
+```rust
+chip8.debug(); // Enable
+chip8.debug(); // Disable
+chip8.debug(); // Enable again
+```
+
+### Via CLI
+
+Use the `--debug` flag when running the CLI:
+
+```bash
+cli --rom roms/test.ch8 --debug
+```
+
+Short form:
+```bash
+cli -r roms/test.ch8 -d
+```
+
+See [CLI Usage](/guides/cli-usage#display-modes) for details on the debug UI.
+
+## What Debug Mode Shows
+
+When debug mode is enabled, the emulator logs execution details to stderr:
+
+### Initialization Messages
+
+<CodeGroup>
+```text Loading Tables
+Loading tables
+Tables loaded
+```
+
+```text Loading Fontset
+Loading fontset
+Fontset loaded
+```
+</CodeGroup>
+
+These appear during emulator initialization when function tables and font data are loaded into memory.
+
+### Opcode Execution Tracing
+
+Every executed opcode logs its name:
+
+```text
+Opcode: 4660
+Ran opcode: Chip8::OP_00E0
+Opcode: 42026
+Ran opcode: Chip8::OP_Annn
+Opcode: 24588
+Ran opcode: Chip8::OP_6xkk
+```
+
+**Format:**
+- `Opcode: <decimal>` - The current opcode in decimal
+- `Ran opcode: <function_name>` - The handler function that executed
+
+You can cross-reference the opcode with the function name to understand execution flow.
+
+### Table Routing
+
+When opcode routing uses sub-tables (for 0xxx, 8xxx, Exxx, Fxxx opcodes):
+
+```text
+Running table: Chip8::Table0
+Ran opcode: Chip8::OP_00E0
+```
+
+```text
+Running table: Chip8::Table8
+Ran opcode: Chip8::OP_8xy4
+```
+
+This helps debug dispatch logic and verify correct opcode parsing.
+
+## Opcode Reference
+
+Here's a quick reference for common opcodes you'll see in debug output:
+
+<AccordionGroup>
+  <Accordion title="Display Opcodes">
+    - `OP_00E0` - Clear screen (0x00E0)
+    - `OP_Dxyn` - Draw sprite at (Vx, Vy) with height N
+  </Accordion>
+  
+  <Accordion title="Flow Control">
+    - `OP_00EE` - Return from subroutine (0x00EE)
+    - `OP_1nnn` - Jump to address NNN
+    - `OP_2nnn` - Call subroutine at NNN
+    - `OP_Bnnn` - Jump to NNN + V0
+  </Accordion>
+  
+  <Accordion title="Skip Opcodes">
+    - `OP_3xkk` - Skip if Vx == KK
+    - `OP_4xkk` - Skip if Vx != KK
+    - `OP_5xy0` - Skip if Vx == Vy
+    - `OP_9xy0` - Skip if Vx != Vy
+    - `OP_Ex9E` - Skip if key Vx is pressed
+    - `OP_ExA1` - Skip if key Vx is not pressed
+  </Accordion>
+  
+  <Accordion title="Register Operations">
+    - `OP_6xkk` - Set Vx = KK
+    - `OP_7xkk` - Set Vx = Vx + KK
+    - `OP_8xy0` - Set Vx = Vy
+    - `OP_8xy1` - Set Vx = Vx OR Vy
+    - `OP_8xy2` - Set Vx = Vx AND Vy
+    - `OP_8xy3` - Set Vx = Vx XOR Vy
+    - `OP_8xy4` - Set Vx = Vx + Vy (with carry)
+    - `OP_8xy5` - Set Vx = Vx - Vy (with borrow)
+    - `OP_8xy6` - Shift Vx right by 1
+    - `OP_8xy7` - Set Vx = Vy - Vx (with borrow)
+    - `OP_8xyE` - Shift Vx left by 1
+  </Accordion>
+  
+  <Accordion title="Memory Operations">
+    - `OP_Annn` - Set I = NNN (index register)
+    - `OP_Fx55` - Store V0-Vx in memory starting at I
+    - `OP_Fx65` - Read V0-Vx from memory starting at I
+  </Accordion>
+  
+  <Accordion title="Timer and BCD">
+    - `OP_Fx07` - Set Vx = delay timer
+    - `OP_Fx15` - Set delay timer = Vx
+    - `OP_Fx18` - Set sound timer = Vx
+    - `OP_Fx33` - Store BCD of Vx at I, I+1, I+2
+  </Accordion>
+  
+  <Accordion title="Other">
+    - `OP_Cxkk` - Set Vx = random byte AND KK
+    - `OP_Fx0A` - Wait for key press, store in Vx
+    - `OP_Fx1E` - Set I = I + Vx
+    - `OP_Fx29` - Set I = location of sprite for digit Vx
+  </Accordion>
+</AccordionGroup>
+
+## Debug CLI Layout
+
+When running the CLI with `--debug`, you get a split-screen interface:
+
+```
+┌────────────────────────────────┬──────────────────┐
+│                                │ ┌──────logs─────┐│
+│                                │ │key 5 down     ││
+│         CHIP-8 Screen          │ │key 5 up       ││
+│         (64×32 display)        │ │key 8 down     ││
+│                                │ │               ││
+│                                │ │               ││
+│                                │ └───────────────┘│
+└────────────────────────────────┴──────────────────┘
+┌──────────────status──────────────────────────────┐
+│ opcode: A23E  quit: Esc or Q  Speed: 64 Hz       │
+└──────────────────────────────────────────────────┘
+```
+
+### Components
+
+<ResponseField name="Left Pane" type="display">
+  The CHIP-8 screen scaled to fit the available terminal space
+</ResponseField>
+
+<ResponseField name="Right Pane" type="log buffer">
+  Scrolling log showing:
+  - Keypress events ("key X down", "key X up")
+  - Terminal resize events
+  - Custom log messages (if you modify the source)
+  
+  Buffer size: 200 lines (oldest entries are dropped)
+</ResponseField>
+
+<ResponseField name="Status Bar" type="info">
+  Displays:
+  - **opcode:** Last executed opcode in hexadecimal
+  - **quit:** Reminder of exit keys (Esc or Q)
+  - **Speed:** Current execution speed in Hz (calculated from `--clock` value)
+</ResponseField>
+
+## Reading Last Opcode
+
+You can access the last executed opcode programmatically:
+
+```rust
+let last_op: u16 = chip8.last_opcode();
+println!("Last executed opcode: {:04X}", last_op);
+```
+
+**Signature:**
+```rust
+pub fn last_opcode(&self) -> u16
+```
+
+This is updated every cycle before the opcode executes:
+
+```rust
+pub fn Cycle(&mut self) {
+    // Fetch opcode
+    self.op_code = /* ... */;
+    self.last_opcode = self.op_code; // Store for debugging
+    
+    // Increment PC and execute
+    self.program_counter += 2;
+    self.table[/* ... */](self);
+    
+    // ...
+}
+```
+
+## Example Debug Session
+
+Here's what a typical debug session looks like:
+
+<Steps>
+  <Step title="Start the emulator with debug mode">
+    ```bash
+    cli --rom roms/test_opcode.ch8 --debug --clock 100
+    ```
+    
+    Output:
+    ```text
+    Loading tables
+    Tables loaded
+    Loading fontset
+    Fontset loaded
+    ```
+  </Step>
+  
+  <Step title="ROM loads and begins execution">
+    ```text
+    Opcode: 224
+    Ran opcode: Chip8::OP_00E0
+    Opcode: 41514
+    Running table: Chip8::TableF
+    Ran opcode: Chip8::OP_Fx29
+    Opcode: 53248
+    Ran opcode: Chip8::OP_Dxyn
+    ```
+    
+    This shows:
+    - Clear screen (0x00E0)
+    - Load font sprite (0xFx29)
+    - Draw sprite (0xDxyn)
+  </Step>
+  
+  <Step title="User presses a key">
+    ```text
+    key 5 down
+    Opcode: 61598
+    Running table: Chip8::TableE
+    Ran opcode: Chip8::OP_Ex9E
+    ```
+    
+    The ROM checks if key 0x5 is pressed.
+  </Step>
+  
+  <Step title="Monitor the status bar">
+    ```
+    opcode: F09E    quit: Esc or Q    Speed: A Hz
+    ```
+    
+    Current opcode is 0xF09E, running at 10 Hz (100ms per cycle).
+  </Step>
+</Steps>
+
+## Debugging Common Issues
+
+<AccordionGroup>
+  <Accordion title="ROM crashes or freezes">
+    Look for:
+    - `OP_ERR` in the logs (unknown opcode)
+    - Opcode values that don't match expected patterns
+    - Infinite loops (same opcode repeating)
+    
+    ```text
+    [ERROR]: Opcode 65535 not valid
+    Ran opcode: Chip8::OP_ERR
+    ```
+    
+    This indicates the ROM hit an invalid instruction.
+  </Accordion>
+  
+  <Accordion title="Graphics not displaying correctly">
+    Check for:
+    - `OP_00E0` (clear screen) being called
+    - `OP_Dxyn` (draw sprite) opcodes
+    - Verify sprite data is loaded at correct memory locations
+    
+    ```text
+    Opcode: 224
+    Ran opcode: Chip8::OP_00E0
+    Opcode: 53249
+    Ran opcode: Chip8::OP_Dxyn
+    ```
+  </Accordion>
+  
+  <Accordion title="Input not working">
+    Enable debug and look for key events in the log:
+    
+    ```text
+    key C down
+    key C up
+    ```
+    
+    If you don't see these when pressing keys, check your keyboard mapping.
+    
+    Also watch for:
+    - `OP_Ex9E` - Skip if key pressed
+    - `OP_ExA1` - Skip if key not pressed
+    - `OP_Fx0A` - Wait for key press
+  </Accordion>
+  
+  <Accordion title="Program counter issues">
+    If execution seems wrong, trace jump/call opcodes:
+    
+    ```text
+    Ran opcode: Chip8::OP_1nnn  # Jump
+    Ran opcode: Chip8::OP_2nnn  # Call subroutine
+    Ran opcode: Chip8::OP_00EE  # Return
+    ```
+    
+    Mismatched calls/returns suggest stack corruption.
+  </Accordion>
+</AccordionGroup>
+
+## Adding Custom Debug Logging
+
+If you're modifying the source, you can add custom debug output:
+
+```rust
+if self.debug_mode {
+    eprintln!("Custom debug: PC={:04X}, I={:04X}", 
+              self.program_counter, self.index_register);
+}
+```
+
+All debug output uses `eprintln!` (stderr) to avoid interfering with stdout.
+
+## Performance Considerations
+
+<Warning>
+Debug mode adds overhead:
+- Every opcode logs to stderr
+- String formatting for each message
+- I/O operations slow down execution
+
+For production or gameplay, disable debug mode.
+</Warning>
+
+**Impact:**
+- Normal mode: ~500-1000 Hz achievable
+- Debug mode: ~100-200 Hz typical (due to I/O)
+
+To minimize impact while debugging:
+```bash
+# Use slower clock speeds in debug mode
+cli -r rom.ch8 -d -c 50  # 20 Hz, plenty of time to read logs
+```
+
+## Exporting Debug Logs
+
+Redirect stderr to capture debug output:
+
+```bash
+cli -r rom.ch8 -d 2> debug.log
+```
+
+Or capture both stdout and stderr:
+
+```bash
+cli -r rom.ch8 -d &> full-output.log
+```
+
+Then analyze the log:
+
+```bash
+# Count opcode executions
+grep "Ran opcode" debug.log | sort | uniq -c | sort -rn
+
+# Find all draw operations
+grep "OP_Dxyn" debug.log
+
+# Check for errors
+grep ERROR debug.log
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="CLI Usage" icon="terminal" href="/guides/cli-usage">
+    Full CLI reference and keyboard mapping
+  </Card>
+  <Card title="Using the Library" icon="code" href="/guides/using-the-library">
+    Integrate debug mode in your own code
+  </Card>
+  <Card title="Architecture" icon="microchip" href="/concepts/chip8-architecture">
+    Understand the emulator internals
+  </Card>
+</CardGroup>

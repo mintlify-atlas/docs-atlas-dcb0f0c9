@@ -1,0 +1,410 @@
+---
+title: Web Platform API
+description: Platform-specific APIs for the WebAssembly browser interface
+---
+
+The Web platform provides a browser-based interface using WebAssembly, rendering to an HTML5 Canvas and exposing control functions to JavaScript.
+
+## Feature Flag
+
+The Web platform is available when the `web` feature is enabled:
+
+```toml
+[features]
+web = ["dep:wasm-bindgen", "dep:web-sys", "dep:js-sys", "dep:console_error_panic_hook"]
+```
+
+## Architecture Overview
+
+The web platform uses a **thread-local singleton** architecture to manage emulator state:
+
+```rust
+thread_local! {
+    static EMU: RefCell<Emu> = RefCell::new(Emu::new_uninit());
+    static TICK_CB: RefCell<Option<Closure<dyn FnMut()>>> = RefCell::new(None);
+    static KEYS_DOWN_MASK: Cell<u32> = Cell::new(0); // bit i set => key i down
+}
+```
+
+### Design Rationale
+
+- **EMU**: Contains the CHIP-8 instance, canvas, rendering context, and state flags
+- **TICK_CB**: Keeps the JavaScript timeout callback alive across invocations
+- **KEYS_DOWN_MASK**: Tracks keyboard state as a 32-bit bitmask (bit *i* = key *i*)
+
+<Note>
+The bitmask approach avoids borrowing conflicts by using `Cell` instead of `RefCell` for key state.
+</Note>
+
+## Emu Struct
+
+The internal emulator state manager (not directly exposed to JavaScript).
+
+### Definition
+
+```rust
+struct Emu {
+    chip8: Chip8,
+    keys_down: [bool; 16],
+    canvas: HtmlCanvasElement,
+    ctx: CanvasRenderingContext2d,
+    loaded: bool,
+    running: bool,
+    delay_ms: u32, // delay between *instruction* ticks
+}
+```
+
+### Fields
+
+- **chip8**: The core CHIP-8 emulator instance
+- **keys_down**: Array tracking which keys are currently pressed
+- **canvas**: HTML canvas element for rendering
+- **ctx**: 2D rendering context
+- **loaded**: Whether a ROM has been loaded
+- **running**: Whether the emulator is running or paused
+- **delay_ms**: Milliseconds between instruction ticks (default: 12ms, ~250 Hz)
+
+### Key Methods
+
+#### new_uninit()
+
+Creates an uninitialized emulator instance with a temporary canvas.
+
+```rust
+fn new_uninit() -> Self {
+    let doc = window().unwrap().document().unwrap();
+    let canvas = doc.create_element("canvas").unwrap().dyn_into::<HtmlCanvasElement>().unwrap();
+    let ctx = canvas.get_context("2d").unwrap().unwrap().dyn_into::<CanvasRenderingContext2d>().unwrap();
+    Self {
+        chip8: Chip8::new(),
+        keys_down: [false;16],
+        canvas,
+        ctx,
+        loaded: false,
+        running: false,   // start paused (manual stepping)
+        delay_ms: 12,      // ~250 Hz instruction rate
+    }
+}
+```
+
+#### tick_once()
+
+Executes exactly one CHIP-8 instruction and updates the display.
+
+```rust
+fn tick_once(&mut self) {
+    self.chip8.Cycle();
+    self.present();
+}
+```
+
+#### present()
+
+Renders the CHIP-8 framebuffer to the HTML canvas.
+
+```rust
+fn present(&self) {
+    let w = self.canvas.width() as f64;
+    let h = self.canvas.height() as f64;
+    let cols = 64f64;
+    let rows = 32f64;
+    let pw = (w / cols).floor();
+    let ph = (h / rows).floor();
+
+    // Clear
+    self.ctx.set_fill_style(&"#000".into());
+    self.ctx.fill_rect(0.0, 0.0, w, h);
+    self.ctx.set_image_smoothing_enabled(false);
+    self.ctx.set_fill_style(&"#2182ff".into());
+
+    let fb = &self.chip8.video;
+
+    for y in 0..32usize {
+        for x in 0..64usize {
+            if fb[y * 64 + x] != 0 {
+                let xf = (x as f64) * pw;
+                let yf = (y as f64) * ph;
+                self.ctx.fill_rect(xf, yf, pw, ph);
+            }
+        }
+    }
+}
+```
+
+**Rendering details:**
+- Clears canvas to black (`#000`)
+- Disables image smoothing for crisp pixels
+- Draws active pixels in blue (`#2182ff`)
+- Scales 64x32 framebuffer to canvas dimensions
+
+#### apply_keymask_edges()
+
+Detects key press/release edges and notifies the CHIP-8 core.
+
+```rust
+fn apply_keymask_edges(&mut self, mask: u32) {
+    for i in 0..16 {
+        let now = (mask >> i) & 1 != 0;
+        let was = self.keys_down[i];
+        if now && !was { self.chip8.key_down(i as u8); }
+        if !now && was { self.chip8.key_up(i as u8); }
+        self.keys_down[i] = now;
+    }
+}
+```
+
+## JavaScript-Exposed Functions
+
+All functions below are exported via `#[wasm_bindgen]` and callable from JavaScript.
+
+### init()
+
+Initializes the emulator and binds it to an HTML canvas element.
+
+```rust
+#[wasm_bindgen]
+pub fn init(canvas_id: &str) -> Result<(), JsValue>
+```
+
+#### JavaScript Example
+
+```javascript
+import init, { init as wasmInit } from './chip8_rs.js';
+
+await init(); // Load WASM module
+await wasmInit('myCanvas'); // Bind to canvas
+```
+
+#### Behavior
+
+1. Sets up panic hook for better error messages (if `web` feature enabled)
+2. Locates the canvas element by ID
+3. Acquires 2D rendering context
+4. Creates timeout-based execution loop
+5. Starts first timeout to begin the render loop
+
+### load_rom()
+
+Loads a CHIP-8 ROM into memory and displays the initial state.
+
+```rust
+#[wasm_bindgen]
+pub fn load_rom(bytes: &[u8]) -> Result<(), JsValue>
+```
+
+#### JavaScript Example
+
+```javascript
+const response = await fetch('roms/pong.ch8');
+const rom = new Uint8Array(await response.arrayBuffer());
+load_rom(rom);
+```
+
+#### Behavior
+
+- Calls `chip8.reset_and_load_bytes(bytes)`
+- Sets `loaded = true`
+- Renders the initial frame
+- Emulator remains paused until `set_running(true)` is called
+
+### set_running()
+
+Starts or pauses emulation.
+
+```rust
+#[wasm_bindgen]
+pub fn set_running(run: bool)
+```
+
+#### JavaScript Example
+
+```javascript
+set_running(true);  // Start
+set_running(false); // Pause
+```
+
+### step()
+
+Executes a specific number of instructions (useful for debugging).
+
+```rust
+#[wasm_bindgen]
+pub fn step(n: u32)
+```
+
+#### JavaScript Example
+
+```javascript
+step(1);   // Execute one instruction
+step(100); // Execute 100 instructions
+```
+
+### set_delay_ms()
+
+Adjusts the delay between instruction ticks to control emulation speed.
+
+```rust
+#[wasm_bindgen]
+pub fn set_delay_ms(ms: u32)
+```
+
+#### JavaScript Example
+
+```javascript
+set_delay_ms(12);  // ~250 Hz (default)
+set_delay_ms(2);   // ~500 Hz (fast)
+set_delay_ms(50);  // ~20 Hz (slow)
+```
+
+<Note>
+The minimum delay is clamped to 1ms to prevent infinite loops.
+</Note>
+
+### reset()
+
+Resets the emulator to its initial state.
+
+```rust
+#[wasm_bindgen]
+pub fn reset()
+```
+
+#### JavaScript Example
+
+```javascript
+reset(); // Clear memory, reset state, stop execution
+```
+
+#### Behavior
+
+- Creates a new `Chip8` instance
+- Clears all key states
+- Sets `loaded = false`
+- Resets the key bitmask
+- Renders a blank screen
+
+### set_key()
+
+Sets the pressed/released state of a CHIP-8 key (0x0-0xF).
+
+```rust
+#[wasm_bindgen]
+pub fn set_key(idx: u8, down: bool)
+```
+
+#### JavaScript Example
+
+```javascript
+// Key 0x5 pressed
+set_key(0x5, true);
+
+// Key 0x5 released
+set_key(0x5, false);
+```
+
+#### Keyboard Mapping Example
+
+```javascript
+const KEY_MAP = {
+  '1': 0x1, '2': 0x2, '3': 0x3, '4': 0xC,
+  'q': 0x4, 'w': 0x5, 'e': 0x6, 'r': 0xD,
+  'a': 0x7, 's': 0x8, 'd': 0x9, 'f': 0xE,
+  'z': 0xA, 'x': 0x0, 'c': 0xB, 'v': 0xF
+};
+
+document.addEventListener('keydown', (e) => {
+  const key = KEY_MAP[e.key.toLowerCase()];
+  if (key !== undefined) set_key(key, true);
+});
+
+document.addEventListener('keyup', (e) => {
+  const key = KEY_MAP[e.key.toLowerCase()];
+  if (key !== undefined) set_key(key, false);
+});
+```
+
+## Execution Loop
+
+The emulator uses a `setTimeout`-based loop instead of `requestAnimationFrame` to allow fine-grained control over instruction rate.
+
+### Loop Implementation
+
+```rust
+TICK_CB.with(|slot| {
+    let cb = Closure::wrap(Box::new(move || {
+        let mask = KEYS_DOWN_MASK.with(|c| c.get());
+        EMU.with(|cell| {
+            let mut emu = cell.borrow_mut();
+
+            // Edge-detect keypad regardless of paused/running
+            emu.apply_keymask_edges(mask);
+
+            if emu.loaded && emu.running {
+                emu.tick_once(); // ONE instruction, ONE present
+            } else {
+                emu.present(); // Repaint even when paused
+            }
+
+            let delay = emu.delay_ms as i32;
+            drop(emu);
+            schedule_next_timeout(delay);
+        });
+    }) as Box<dyn FnMut()>);
+    *slot.borrow_mut() = Some(cb);
+});
+```
+
+### Key Points
+
+- Executes **one instruction per timeout** (not per frame)
+- Updates keyboard state before each tick
+- Repaints even when paused (for reset/load visibility)
+- Automatically schedules the next timeout
+
+## Platform Dependencies
+
+The Web platform depends on:
+
+```toml
+[dependencies.wasm-bindgen]
+version = "0.2"
+optional = true
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "Window",
+  "Document",
+  "HtmlCanvasElement",
+  "CanvasRenderingContext2d",
+  "KeyboardEvent",
+  "console"
+]
+optional = true
+
+[dependencies.js-sys]
+version = "0.3"
+optional = true
+
+[dependencies.console_error_panic_hook]
+version = "0.1"
+optional = true
+```
+
+## Building for Web
+
+```bash
+# Install wasm-pack
+cargo install wasm-pack
+
+# Build the WebAssembly module
+wasm-pack build --target web --features web
+
+# Output in pkg/ directory
+```
+
+## See Also
+
+- [CLI Platform API](/api/cli-platform) - Terminal-based platform implementation
+- [Core API](/api/core) - Core CHIP-8 emulator
+- [Chip8 Struct](/api/chip8-struct) - Main emulator state

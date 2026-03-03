@@ -1,0 +1,375 @@
+---
+title: 'Timer Implementation'
+description: 'How delay and sound timers work in CHIP-8'
+---
+
+## Overview
+
+CHIP-8 has two hardware timers that decrement at 60 Hz, independent of the CPU clock speed. These timers are crucial for game timing and sound effects.
+
+## Timer Fields
+
+Both timers are 8-bit registers in the `Chip8` struct:
+
+```rust
+// From chip8.rs:25-26
+pub struct Chip8 {
+    // ... other fields ...
+    delay_timer: u8,
+    sound_timer: u8,
+    // ... other fields ...
+}
+```
+
+Initialized to zero:
+
+```rust
+// chip8.rs:86-87
+delay_timer: 0,
+sound_timer: 0,
+```
+
+## How Timers Work
+
+Both timers:
+- Count down from their set value to 0
+- Decrement at **60 Hz** (60 times per second)
+- Stop at 0 (don't go negative)
+- Are independent of CPU instruction speed
+
+### Delay Timer
+
+General-purpose timer for game logic:
+- Games set it with opcode `FX15`
+- Games read it with opcode `FX07`
+- Used for delays, animation timing, cooldowns
+
+### Sound Timer
+
+Controls the buzzer sound:
+- Set with opcode `FX18`
+- **Buzzer sounds while > 0**
+- No read opcode (write-only)
+- Used for sound effects
+
+## Timer Decrement in Cycle()
+
+Timers decrement at the end of every CPU cycle:
+
+```rust
+// From Cycle() method (chip8.rs:1021-1028)
+pub fn Cycle(&mut self) {
+    // Fetch opcode
+    self.op_code = ((self.memory[self.program_counter as usize] as u16)
+        .checked_shl(8).unwrap_or(0)) 
+        | self.memory[(self.program_counter + 1) as usize] as u16;
+    
+    self.last_opcode = self.op_code;
+    self.program_counter += 2;
+
+    // Decode and execute
+    self.table[((self.op_code & 0xF000).checked_shr(12).unwrap_or(0)) as usize](self);
+
+    // Decrement delay timer if it exists
+    if (self.delay_timer > 0) {
+        self.delay_timer -= 1;
+    }
+
+    // Decrement sound timer if it exists
+    if (self.sound_timer > 0) {
+        self.sound_timer -= 1;
+    }
+}
+```
+
+<Warning>
+This implementation decrements timers **every CPU cycle**, not at true 60 Hz. For accurate timing, the host application must call `Cycle()` at the correct rate.
+</Warning>
+
+## Why This Implementation?
+
+### Conditional Decrement
+
+```rust
+if (self.delay_timer > 0) {
+    self.delay_timer -= 1;
+}
+```
+
+**Prevents underflow**: Timers stop at 0 rather than wrapping to 255.
+
+**Alternative approach** (not used):
+```rust
+self.delay_timer = self.delay_timer.saturating_sub(1);
+```
+
+The if-check is more explicit and matches CHIP-8 specification exactly.
+
+### End of Cycle Placement
+
+Timers decrement **after** opcode execution:
+
+```
+1. Fetch opcode
+2. Increment PC
+3. Execute opcode
+4. Decrement timers  ← happens here
+```
+
+**Why?** Opcodes that read timers see the value **before** decrement in that cycle:
+
+```rust
+// If delay_timer = 5:
+// 1. Opcode FX07 reads delay_timer → gets 5
+// 2. Timer decrements → becomes 4
+// Next cycle: delay_timer = 4
+```
+
+This matches original CHIP-8 hardware behavior.
+
+## Timer-Related Opcodes
+
+### Reading Delay Timer (FX07)
+
+```rust
+// chip8.rs:809-816
+fn OP_Fx07(&mut self) {
+    let Vx: u8 = (self.op_code & 0x0F00).checked_shr(8).unwrap_or(0).try_into().unwrap();
+    
+    self.registers[Vx as usize] = self.delay_timer;
+}
+```
+
+**Usage:** Games use this to wait for delays:
+
+```assembly
+; Wait for delay to reach 0
+LD V0, #10      ; Set delay to 10
+LD DT, V0
+
+:wait_loop
+LD V0, DT       ; Read delay timer
+SE V0, #0       ; Skip if zero
+JP wait_loop    ; Keep waiting
+```
+
+### Setting Delay Timer (FX15)
+
+```rust
+// chip8.rs:865-872
+fn OP_Fx15(&mut self) {
+    let Vx: u8 = (self.op_code & 0x0F00).checked_shr(8).unwrap_or(0).try_into().unwrap();
+    
+    self.delay_timer = self.registers[Vx as usize];
+}
+```
+
+**Usage:** Set delays for animation, cooldowns, etc.
+
+### Setting Sound Timer (FX18)
+
+```rust
+// chip8.rs:876-883
+fn OP_Fx18(&mut self) {
+    let Vx: u8 = (self.op_code & 0x0F00).checked_shr(8).unwrap_or(0).try_into().unwrap();
+    
+    self.sound_timer = self.registers[Vx as usize];
+}
+```
+
+**Usage:** Trigger sound effects:
+
+```assembly
+LD V0, #10      ; Beep for ~167ms (10/60 seconds)
+LD ST, V0
+```
+
+<Note>
+The emulator library only manages the timer value. The **host application** is responsible for actually playing sound when `sound_timer > 0`.
+</Note>
+
+## Reset Behavior
+
+Timers are reset during hard reset:
+
+```rust
+// chip8.rs:229-230
+pub fn reset_hard(&mut self) {
+    // ... other resets ...
+    self.delay_timer = 0;
+    self.sound_timer = 0;
+    // ... other resets ...
+}
+```
+
+All timers clear when loading a new ROM.
+
+## Timing Accuracy
+
+For accurate 60 Hz timing, the host application should:
+
+### Option 1: Fixed Rate Cycles
+
+```rust
+use std::{thread, time};
+
+let mut chip8 = Chip8::new();
+chip8.load_rom(path)?;
+
+let cycle_time = time::Duration::from_micros(16667); // ~60 Hz
+
+loop {
+    chip8.Cycle();
+    thread::sleep(cycle_time);
+}
+```
+
+**Problem:** Doesn't account for execution time.
+
+### Option 2: Frame-Based Timing
+
+```rust
+let mut chip8 = Chip8::new();
+let cycles_per_frame = 10; // CPU speed adjustment
+
+loop {
+    for _ in 0..cycles_per_frame {
+        chip8.Cycle();
+    }
+    
+    // Render at 60 FPS
+    render_display(&chip8.video);
+    
+    // Sleep to maintain 60 Hz
+    thread::sleep(Duration::from_millis(16));
+}
+```
+
+**Better:** Timers decrement at display refresh rate (60 Hz).
+
+### Option 3: Separate Timer Thread (Advanced)
+
+```rust
+use std::sync::{Arc, Mutex};
+
+let chip8 = Arc::new(Mutex::new(Chip8::new()));
+let chip8_clone = chip8.clone();
+
+// Timer thread at 60 Hz
+thread::spawn(move || {
+    loop {
+        thread::sleep(Duration::from_millis(16));
+        
+        let mut chip = chip8_clone.lock().unwrap();
+        if chip.delay_timer > 0 {
+            chip.delay_timer -= 1;
+        }
+        if chip.sound_timer > 0 {
+            chip.sound_timer -= 1;
+        }
+    }
+});
+
+// Main thread runs CPU as fast as possible
+loop {
+    chip8.lock().unwrap().Cycle();
+}
+```
+
+**Most accurate:** Separates CPU speed from timer frequency, matching real hardware.
+
+## Sound Timer Usage
+
+The library exposes sound timer state but doesn't play audio. Host application should:
+
+```rust
+loop {
+    chip8.Cycle();
+    
+    // Check sound timer (access internal field)
+    // Note: sound_timer is private, so in practice you'd need
+    // to add a public getter or make it pub
+    
+    if chip8.sound_timer > 0 {
+        play_beep_sound();
+    } else {
+        stop_beep_sound();
+    }
+    
+    thread::sleep(Duration::from_millis(16));
+}
+```
+
+<Tip>
+CHIP-8's sound is a simple constant-frequency beep. A 440 Hz square wave is traditional.
+</Tip>
+
+## Common Timer Patterns
+
+Games use timers for:
+
+### 1. Animation Delays
+
+```assembly
+LD V0, #5       ; 5/60 second delay (~83ms)
+LD DT, V0
+
+:wait
+LD V1, DT
+SE V1, #0
+JP wait
+
+; Continue animation
+```
+
+### 2. Cooldowns
+
+```assembly
+; Prevent rapid firing
+LD V0, DT       ; Check cooldown
+SNE V0, #0
+JP can_fire
+
+JP skip_fire
+
+:can_fire
+CALL fire_bullet
+LD V0, #30      ; 0.5 second cooldown
+LD DT, V0
+
+:skip_fire
+```
+
+### 3. Sound Effects
+
+```assembly
+; Ball hit paddle
+CALL check_collision
+SE V0, #1       ; V0 = collision flag
+JP no_sound
+
+LD V0, #3       ; Short beep
+LD ST, V0
+
+:no_sound
+```
+
+## Educational Insights
+
+The timer implementation teaches:
+
+1. **Hardware simulation**: Emulating fixed-rate hardware in software
+2. **Timing independence**: Separating logic speed from timer speed
+3. **Checked arithmetic**: Using comparisons to prevent underflow
+4. **Specification compliance**: Matching original hardware behavior exactly
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Opcode Implementation" icon="code" href="/advanced/opcode-implementation">
+    See timer opcodes (FX07, FX15, FX18) in detail
+  </Card>
+  <Card title="CPU Cycle" icon="rotate" href="/api/execution">
+    Learn about the complete CPU execution cycle
+  </Card>
+</CardGroup>

@@ -1,0 +1,335 @@
+---
+title: 'Function Pointer Tables'
+description: 'Understanding the dispatch mechanism for CHIP-8 opcodes'
+---
+
+## Overview
+
+Instead of using a large `match` statement or if-else chain, CHIP-8-rs uses **function pointer tables** to dispatch opcodes. This approach is faster, more maintainable, and demonstrates advanced Rust patterns.
+
+## The Problem
+
+CHIP-8 has 35 different opcodes. A naive implementation might look like:
+
+```rust
+// Anti-pattern: large match statement
+match opcode {
+    0x00E0 => self.clear_screen(),
+    0x00EE => self.return_from_subroutine(),
+    0x1000..=0x1FFF => self.jump(addr),
+    // ... 30+ more cases ...
+}
+```
+
+**Problems:**
+- Slow: compiler must check many conditions
+- Unmaintainable: adding opcodes means editing a giant match
+- Not extensible: hard to add custom opcodes
+
+## The Solution: Function Tables
+
+CHIP-8-rs uses arrays of function pointers for O(1) dispatch:
+
+```rust
+// From chip8.rs:31-35
+pub struct Chip8 {
+    // ... other fields ...
+    table: [fn(&mut Chip8); 0xF+1],
+    table0: [fn(&mut Chip8); 0xE+1],
+    table8: [fn(&mut Chip8); 0xE+1],
+    tableE: [fn(&mut Chip8); 0xE+1],
+    tableF: [fn(&mut Chip8); 0x65+1],
+}
+```
+
+## Table Structure
+
+### Main Table
+
+The primary `table` array uses the first nibble (4 bits) of the opcode:
+
+```rust
+// From add_table() method (chip8.rs:135-152)
+let table: [fn(&mut Chip8); 0xF+1] = [
+    Chip8::Table0,   // 0x0___ (redirects to table0)
+    Chip8::OP_1nnn,  // 0x1___ Jump
+    Chip8::OP_2nnn,  // 0x2___ Call subroutine
+    Chip8::OP_3xkk,  // 0x3___ Skip if Vx == kk
+    Chip8::OP_4xkk,  // 0x4___ Skip if Vx != kk
+    Chip8::OP_5xy0,  // 0x5___ Skip if Vx == Vy
+    Chip8::OP_6xkk,  // 0x6___ Set Vx = kk
+    Chip8::OP_7xkk,  // 0x7___ Set Vx = Vx + kk
+    Chip8::Table8,   // 0x8___ (redirects to table8)
+    Chip8::OP_9xy0,  // 0x9___ Skip if Vx != Vy
+    Chip8::OP_Annn,  // 0xA___ Set I = nnn
+    Chip8::OP_Bnnn,  // 0xB___ Jump to nnn + V0
+    Chip8::OP_Cxkk,  // 0xC___ Set Vx = random & kk
+    Chip8::OP_Dxyn,  // 0xD___ Draw sprite
+    Chip8::TableE,   // 0xE___ (redirects to tableE)
+    Chip8::TableF    // 0xF___ (redirects to tableF)
+];
+```
+
+<Note>
+Indexes 0, 8, E, and F point to **secondary tables** rather than direct opcodes, because multiple opcodes share these prefixes.
+</Note>
+
+### Secondary Tables
+
+Some opcode families need additional dispatch:
+
+#### Table0 - Screen and Flow Control
+
+```rust
+// chip8.rs:156-162
+let mut table0: [fn(&mut Chip8); 0xE+1] = [Chip8::OP_ERR; 0xE+1];
+
+table0[0x0] = Chip8::OP_00E0;  // Clear screen
+table0[0xE] = Chip8::OP_00EE;  // Return from subroutine
+```
+
+Initialized with `OP_ERR` fallback, then specific opcodes override slots 0x0 and 0xE.
+
+#### Table8 - Arithmetic and Logic
+
+```rust
+// chip8.rs:157, 164-172
+let mut table8: [fn(&mut Chip8); 0xE+1] = [Chip8::OP_ERR; 0xE+1];
+
+table8[0x0] = Chip8::OP_8xy0;  // Set Vx = Vy
+table8[0x1] = Chip8::OP_8xy1;  // Vx |= Vy
+table8[0x2] = Chip8::OP_8xy2;  // Vx &= Vy
+table8[0x3] = Chip8::OP_8xy3;  // Vx ^= Vy
+table8[0x4] = Chip8::OP_8xy4;  // Vx += Vy (with carry)
+table8[0x5] = Chip8::OP_8xy5;  // Vx -= Vy (with borrow)
+table8[0x6] = Chip8::OP_8xy6;  // Vx >>= 1
+table8[0x7] = Chip8::OP_8xy7;  // Vx = Vy - Vx
+table8[0xE] = Chip8::OP_8xyE;  // Vx <<= 1
+```
+
+#### TableE - Keyboard Operations
+
+```rust
+// chip8.rs:158, 174-175
+let mut tableE: [fn(&mut Chip8); 0xE+1] = [Chip8::OP_ERR; 0xE+1];
+
+tableE[0x1] = Chip8::OP_ExA1;  // Skip if key NOT pressed
+tableE[0xE] = Chip8::OP_Ex9E;  // Skip if key pressed
+```
+
+#### TableF - Timers, Memory, and Misc
+
+```rust
+// chip8.rs:159, 177-185
+let mut tableF: [fn(&mut Chip8); 0x65+1] = [Chip8::OP_ERR; 0x65+1];
+
+tableF[0x07] = Chip8::OP_Fx07;  // Vx = delay_timer
+tableF[0x0A] = Chip8::OP_Fx0A;  // Wait for key press
+tableF[0x15] = Chip8::OP_Fx15;  // delay_timer = Vx
+tableF[0x18] = Chip8::OP_Fx18;  // sound_timer = Vx
+tableF[0x1E] = Chip8::OP_Fx1E;  // I += Vx
+tableF[0x29] = Chip8::OP_Fx29;  // I = sprite_addr[Vx]
+tableF[0x33] = Chip8::OP_Fx33;  // Store BCD of Vx
+tableF[0x55] = Chip8::OP_Fx55;  // Store V0-Vx to memory
+tableF[0x65] = Chip8::OP_Fx65;  // Load V0-Vx from memory
+```
+
+<Note>
+tableF is largest (0x65+1 = 102 elements) because opcodes use the last byte for indexing.
+</Note>
+
+## The add_table() Method
+
+Tables are initialized during emulator creation:
+
+```rust
+// chip8.rs:130-198
+pub fn add_table(&mut self) {
+    if (self.debug_mode) {
+        eprintln!("Loading tables");
+    }
+
+    let table: [fn(&mut Chip8); 0xF+1] = [
+        // ... main table initialization ...
+    ];
+
+    let mut table0: [fn(&mut Chip8); 0xE+1] = [Chip8::OP_ERR; 0xE+1];
+    let mut table8: [fn(&mut Chip8); 0xE+1] = [Chip8::OP_ERR; 0xE+1];
+    let mut tableE: [fn(&mut Chip8); 0xE+1] = [Chip8::OP_ERR; 0xE+1];
+    let mut tableF: [fn(&mut Chip8); 0x65+1] = [Chip8::OP_ERR; 0x65+1];
+
+    // Populate secondary tables
+    table0[0x0] = Chip8::OP_00E0;
+    table0[0xE] = Chip8::OP_00EE;
+    // ... etc ...
+
+    // Apply the newly generated tables
+    self.table = table;
+    self.table0 = table0;
+    self.table8 = table8;
+    self.tableE = tableE;
+    self.tableF = tableF;
+
+    if (self.debug_mode) {
+        eprintln!("Tables loaded");
+    }
+}
+```
+
+**Called during construction:**
+
+```rust
+// chip8.rs:102-103
+chip8.load_fonts();
+chip8.add_table();
+```
+
+## Dispatch Mechanism
+
+During each CPU cycle, opcodes are dispatched via the tables:
+
+```rust
+// In Cycle() method (chip8.rs:1018)
+self.table[((self.op_code & 0xF000).checked_shr(12).unwrap_or(0)) as usize](self);
+```
+
+Step-by-step:
+1. `self.op_code & 0xF000` - Extract first nibble (e.g., 0xD000)
+2. `.checked_shr(12)` - Shift right 12 bits (0xD000 → 0xD)
+3. Use as index into `table` array
+4. Call the function pointer with `self`
+
+### Secondary Table Dispatch
+
+Some table entries are dispatcher functions:
+
+```rust
+// Table0 dispatcher (chip8.rs:971-976)
+fn Table0(&mut self) {
+    if self.debug_mode {
+        eprintln!("Running table: {}", function_name!());
+    }
+    self.table0[(self.op_code & 0x000F) as usize](self);
+}
+
+// Table8 dispatcher (chip8.rs:979-984)
+fn Table8(&mut self) {
+    if self.debug_mode {
+        eprintln!("Running table: {}", function_name!());
+    }
+    self.table8[(self.op_code & 0x000F) as usize](self);
+}
+
+// TableF dispatcher (chip8.rs:995-1000)
+fn TableF(&mut self) {
+    if self.debug_mode {
+        eprintln!("Running table: {}", function_name!());
+    }
+    self.tableF[(self.op_code & 0x00FF) as usize](self);
+}
+```
+
+Example flow for opcode `0x8124`:
+1. Main table sees `0x8` → calls `Table8`
+2. `Table8` sees `0x4` → calls `OP_8xy4` (add with carry)
+
+## Why This Design?
+
+### Performance
+- **O(1) dispatch**: Array lookup is constant time
+- **No branching**: CPU doesn't need to evaluate conditions
+- **Cache-friendly**: Tables are contiguous in memory
+
+### Maintainability
+- **Centralized**: All opcode mappings in one place
+- **Clear structure**: Easy to see which opcodes are implemented
+- **Safe defaults**: Unimplemented opcodes call `OP_ERR`
+
+### Extensibility
+- **Easy to add**: Just create function and add to table
+- **Override support**: Could swap function pointers at runtime
+- **Variant support**: Different CHIP-8 variants could use different tables
+
+## Error Handling
+
+All secondary tables initialize with the error handler:
+
+```rust
+let mut table0: [fn(&mut Chip8); 0xE+1] = [Chip8::OP_ERR; 0xE+1];
+```
+
+This means any opcode not explicitly assigned calls:
+
+```rust
+// chip8.rs:962-967
+fn OP_ERR(&mut self) {
+    eprintln!("[ERROR]: Opcode {} not valid", self.op_code);
+    if self.debug_mode {
+        eprintln!("Ran opcode: {}", function_name!());
+    }
+}
+```
+
+Safe by default - no crashes from invalid opcodes.
+
+## Educational Insights
+
+This pattern demonstrates several Rust concepts:
+
+1. **Function pointers as first-class values**
+   ```rust
+   fn(&mut Chip8)  // Function type
+   ```
+
+2. **Array initialization with values**
+   ```rust
+   [Chip8::OP_ERR; 0xE+1]  // Repeat pattern
+   ```
+
+3. **Method references**
+   ```rust
+   Chip8::OP_00E0  // Reference to method
+   ```
+
+4. **Self-referential calls**
+   ```rust
+   self.table[index](self)  // Pass self to function from self
+   ```
+
+## Comparison with Match Statement
+
+**Function table approach:**
+```rust
+self.table[(self.op_code >> 12) as usize](self);  // One line
+```
+
+**Equivalent match statement:**
+```rust
+match (self.op_code & 0xF000) >> 12 {
+    0x0 => match self.op_code & 0x000F {
+        0x0 => self.OP_00E0(),
+        0xE => self.OP_00EE(),
+        _ => self.OP_ERR(),
+    },
+    0x1 => self.OP_1nnn(),
+    0x2 => self.OP_2nnn(),
+    // ... 30+ more arms ...
+    _ => self.OP_ERR(),
+}
+```
+
+The function table is:
+- **Faster**: No condition evaluation
+- **Shorter**: ~50 lines vs ~100+ lines
+- **Clearer**: Structure is obvious
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Opcode Implementation" icon="code" href="/advanced/opcode-implementation">
+    See how individual opcodes are implemented
+  </Card>
+  <Card title="Architecture" icon="microchip" href="/concepts/chip8-architecture">
+    Understand the complete emulator structure
+  </Card>
+</CardGroup>

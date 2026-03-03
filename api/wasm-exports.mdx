@@ -1,0 +1,241 @@
+---
+title: 'WASM Exports'
+description: 'Complete reference for all WebAssembly exported functions'
+icon: 'function'
+---
+
+## Overview
+
+The CHIP-8 emulator exposes several functions to JavaScript through `wasm-bindgen`. All exports are defined in `src/platform_web.rs` and control the emulator lifecycle, execution, and input.
+
+## Initialization
+
+### init
+
+Initializes the WASM emulator and binds it to a canvas element.
+
+```rust
+#[wasm_bindgen]
+pub fn init(canvas_id: &str) -> Result<(), JsValue>
+```
+
+<ParamField path="canvas_id" type="string" required>
+  The HTML `id` attribute of the canvas element to render to
+</ParamField>
+
+**Returns:** `Result<(), JsValue>` - Ok on success, error with message on failure
+
+**Usage:**
+
+```javascript
+import init, { init as wasmInit } from './pkg/chip8_rs.js';
+
+await init();           // Initialize WASM module
+await wasmInit('screen'); // Bind to canvas#screen
+```
+
+**Implementation details:**
+- Sets up console panic hooks when compiled with `web` feature
+- Locates canvas element by ID and acquires 2D rendering context
+- Initializes internal emulator state and renders blank screen
+- Creates setTimeout-based tick loop for instruction execution
+- Auto-schedules first repaint at 16ms
+
+---
+
+## ROM Management
+
+### load_rom
+
+Loads a CHIP-8 ROM into emulator memory.
+
+```rust
+#[wasm_bindgen]
+pub fn load_rom(bytes: &[u8]) -> Result<(), JsValue>
+```
+
+<ParamField path="bytes" type="Uint8Array" required>
+  Raw ROM bytes to load into memory starting at address 0x200
+</ParamField>
+
+**Returns:** `Result<(), JsValue>` - Ok on success, error with message on failure
+
+**Usage:**
+
+```javascript
+const response = await fetch('./roms/test_opcode.ch8');
+const romBytes = new Uint8Array(await response.arrayBuffer());
+await load_rom(romBytes);
+```
+
+**Behavior:**
+- Calls `reset_and_load_bytes()` on the CHIP-8 core
+- Sets emulator to loaded state
+- Renders initial frame
+- Remains paused by default (call `set_running(true)` to auto-execute)
+
+### reset
+
+Resets the emulator to initial state.
+
+```rust
+#[wasm_bindgen]
+pub fn reset()
+```
+
+**Usage:**
+
+```javascript
+reset();
+```
+
+**Behavior:**
+- Creates new CHIP-8 instance
+- Clears all key states
+- Sets loaded flag to false
+- Resets keypad mask
+- Renders blank screen
+
+---
+
+## Execution Control
+
+### set_running
+
+Starts or pauses automatic instruction execution.
+
+```rust
+#[wasm_bindgen]
+pub fn set_running(run: bool)
+```
+
+<ParamField path="run" type="boolean" required>
+  `true` to enable auto-execution, `false` to pause
+</ParamField>
+
+**Usage:**
+
+```javascript
+set_running(true);  // Start emulation
+set_running(false); // Pause emulation
+```
+
+**Notes:**
+- When running, executes one instruction per timeout tick
+- When paused, screen still refreshes but no instructions execute
+- Step commands work regardless of running state
+
+### step
+
+Executes a specific number of instructions immediately.
+
+```rust
+#[wasm_bindgen]
+pub fn step(n: u32)
+```
+
+<ParamField path="n" type="number" required>
+  Number of CHIP-8 instructions to execute
+</ParamField>
+
+**Usage:**
+
+```javascript
+step(1);   // Execute one instruction
+step(10);  // Execute ten instructions
+step(100); // Execute one hundred instructions
+```
+
+**Behavior:**
+- Executes exactly `n` instructions
+- Renders screen after each instruction
+- Stops early if ROM not loaded
+- Useful for debugging and manual stepping
+
+### set_delay_ms
+
+Sets the delay between automatic instruction ticks.
+
+```rust
+#[wasm_bindgen]
+pub fn set_delay_ms(ms: u32)
+```
+
+<ParamField path="ms" type="number" required>
+  Milliseconds between instructions (minimum 1ms)
+</ParamField>
+
+**Usage:**
+
+```javascript
+set_delay_ms(12);  // ~250 Hz (default)
+set_delay_ms(1);   // ~1000 Hz (fast)
+set_delay_ms(100); // ~10 Hz (slow)
+```
+
+**Notes:**
+- Default is 12ms (~83 instructions per second)
+- Lower values = faster execution
+- Values below 1 are clamped to 1
+- Only affects auto-execution when `set_running(true)`
+
+---
+
+## Input Handling
+
+### set_key
+
+Sets the pressed state of a CHIP-8 keypad key.
+
+```rust
+#[wasm_bindgen]
+pub fn set_key(idx: u8, down: bool)
+```
+
+<ParamField path="idx" type="number" required>
+  Key index (0x0-0xF) to update
+</ParamField>
+
+<ParamField path="down" type="boolean" required>
+  `true` for key press, `false` for key release
+</ParamField>
+
+**Usage:**
+
+```javascript
+set_key(0x0, true);  // Press key 0
+set_key(0xF, false); // Release key F
+```
+
+**CHIP-8 Keypad Layout:**
+
+```
+1 2 3 C     (0x1 0x2 0x3 0xC)
+Q W E R  →  (0x4 0x5 0x6 0xD)
+A S D F     (0x7 0x8 0x9 0xE)
+Z X C V     (0xA 0x0 0xB 0xF)
+```
+
+**Implementation:**
+- Updates internal key mask bitfield
+- Edge detection occurs in next tick callback
+- Invalid indices (>= 16) are ignored
+- Key states processed even when paused
+
+---
+
+## Function Summary
+
+| Function | Purpose | Returns |
+|----------|---------|----------|
+| `init(canvas_id)` | Initialize emulator with canvas | `Result<(), JsValue>` |
+| `load_rom(bytes)` | Load ROM into memory | `Result<(), JsValue>` |
+| `reset()` | Reset to initial state | void |
+| `set_running(run)` | Start/pause auto-execution | void |
+| `step(n)` | Execute n instructions | void |
+| `set_delay_ms(ms)` | Set execution speed | void |
+| `set_key(idx, down)` | Update key state | void |
+
+## Source Code
+
+All WASM exports are implemented in `src/platform_web.rs:97-209`.

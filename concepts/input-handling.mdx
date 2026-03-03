@@ -1,0 +1,353 @@
+---
+title: 'Input Handling'
+description: 'Understanding the 16-key keypad and input processing in CHIP-8'
+---
+
+## Overview
+
+The CHIP-8 features a 16-key hexadecimal keypad (0-F). Input is handled through a keypad state array and a queue of recent key presses for blocking input operations.
+
+## Keypad Layout
+
+The original CHIP-8 keypad layout:
+
+```
+┌───┬───┬───┬───┐
+│ 1 │ 2 │ 3 │ C │
+├───┼───┼───┼───┤
+│ 4 │ 5 │ 6 │ D │
+├───┼───┼───┼───┤
+│ 7 │ 8 │ 9 │ E │
+├───┼───┼───┼───┤
+│ A │ 0 │ B │ F │
+└───┴───┴───┴───┘
+```
+
+Modern keyboard mappings typically use:
+
+```
+┌───┬───┬───┬───┐
+│ 1 │ 2 │ 3 │ 4 │  →  │ 1 │ 2 │ 3 │ C │
+├───┼───┼───┼───┤     ├───┼───┼───┼───┤
+│ Q │ W │ E │ R │  →  │ 4 │ 5 │ 6 │ D │
+├───┼───┼───┼───┤     ├───┼───┼───┼───┤
+│ A │ S │ D │ F │  →  │ 7 │ 8 │ 9 │ E │
+├───┼───┼───┼───┤     ├───┼───┼───┼───┤
+│ Z │ X │ C │ V │  →  │ A │ 0 │ B │ F │
+└───┴───┴───┴───┘     └───┴───┴───┴───┘
+```
+
+## Input State Structure
+
+The emulator maintains two input-related fields:
+
+```rust
+pub keypad: [u8; 16],              // Current key states
+recent_presses: VecDeque<u8>,      // Queue of recent key presses
+```
+
+### Keypad Array
+
+- **Type**: `[u8; 16]` (public)
+- **Values**: `0` = not pressed, `1` = pressed
+- **Indexing**: Direct mapping to hex keys (0-F)
+
+<Info>
+The keypad array is public, allowing frontends to read current input state or even manipulate it directly for debugging.
+</Info>
+
+### Recent Presses Queue
+
+- **Type**: `VecDeque<u8>` (private)
+- **Purpose**: Track key press events (transitions from up to down)
+- **Usage**: Used by the `Fx0A` wait-for-key instruction
+
+## Input Methods
+
+The emulator provides three primary input methods (`src/chip8.rs:342-365`):
+
+### key_down
+
+Called when a key is pressed:
+
+```rust
+pub fn key_down(&mut self, k: u8) {
+    let idx = k as usize;
+    if self.keypad[idx] == 0 {
+        self.keypad[idx] = 1;
+        // Record only the transition (press edge)
+        self.recent_presses.push_back(k);
+    }
+}
+```
+
+<Note>
+The key press is only added to `recent_presses` on the transition from unpressed to pressed. Holding a key doesn't generate multiple events.
+</Note>
+
+### key_up
+
+Called when a key is released:
+
+```rust
+pub fn key_up(&mut self, k: u8) {
+    self.keypad[k as usize] = 0;
+}
+```
+
+Simple and straightforward - just clears the key state.
+
+### is_key_down
+
+Checks if a key is currently pressed:
+
+```rust
+pub fn is_key_down(&self, k: u8) -> bool {
+    self.keypad[k as usize] != 0
+}
+```
+
+### take_recent_press
+
+Pops the oldest key press from the queue:
+
+```rust
+pub fn take_recent_press(&mut self) -> Option<u8> {
+    self.recent_presses.pop_front()
+}
+```
+
+Returns `Some(key)` if a press is available, `None` if the queue is empty.
+
+## Input Instructions
+
+CHIP-8 has three input-related opcodes:
+
+### Ex9E - Skip if Key Pressed
+
+Skips the next instruction if the key in Vx is currently pressed:
+
+```rust
+// src/chip8.rs:781-791
+fn OP_Ex9E(&mut self) {
+    let Vx = (self.op_code & 0x0F00) >> 8;
+    let key = self.registers[Vx as usize];
+    
+    if self.keypad[key as usize] != 0 {
+        self.program_counter += 2;
+    }
+}
+```
+
+**Example usage**:
+```
+LD V0, #5      ; Load 5 into V0
+SKP V0         ; Skip next if key 5 is pressed
+JP 0x300       ; Jump if key 5 is NOT pressed
+```
+
+### ExA1 - Skip if Key Not Pressed
+
+Skips the next instruction if the key in Vx is NOT pressed:
+
+```rust
+// src/chip8.rs:795-805
+fn OP_ExA1(&mut self) {
+    let Vx = (self.op_code & 0x0F00) >> 8;
+    let key = self.registers[Vx as usize];
+    
+    if self.keypad[key as usize] == 0 {
+        self.program_counter += 2;
+    }
+}
+```
+
+**Example usage**:
+```
+LD V0, #9      ; Load 9 into V0
+SKNP V0        ; Skip next if key 9 is NOT pressed
+JP 0x400       ; Jump if key 9 IS pressed
+```
+
+### Fx0A - Wait for Key Press
+
+Blocking operation that waits for any key press and stores it in Vx:
+
+```rust
+// src/chip8.rs:820-861
+fn OP_Fx0A(&mut self) {
+    let Vx = (self.op_code & 0x0F00) >> 8;
+    
+    if self.keypad[0] != 0 {
+        self.registers[Vx as usize] = 0;
+    } else if self.keypad[1] != 0 {
+        self.registers[Vx as usize] = 1;
+    } else if self.keypad[2] != 0 {
+        self.registers[Vx as usize] = 2;
+    }
+    // ... checks for keys 3-15 ...
+    else {
+        // No key pressed - repeat this instruction
+        self.program_counter -= 2;
+    }
+}
+```
+
+<Warning>
+This is a **blocking** instruction. The program counter is decremented to repeat the same instruction until a key is pressed.
+</Warning>
+
+**Example usage**:
+```
+LD V5, K       ; Wait for key press, store in V5
+LD V0, V5      ; Use the pressed key value
+```
+
+## Input Event Flow
+
+<Steps>
+  <Step title="User presses key">
+    Frontend calls `key_down(k)` where k is 0-15
+  </Step>
+  <Step title="State updated">
+    `keypad[k]` is set to 1, and k is added to `recent_presses` queue
+  </Step>
+  <Step title="Program checks input">
+    CHIP-8 instructions can check `keypad` array or pop from `recent_presses`
+  </Step>
+  <Step title="User releases key">
+    Frontend calls `key_up(k)`, setting `keypad[k]` back to 0
+  </Step>
+</Steps>
+
+## Edge Detection
+
+The `recent_presses` queue implements edge detection:
+
+```rust
+if self.keypad[idx] == 0 {  // Only if key was NOT already pressed
+    self.keypad[idx] = 1;
+    self.recent_presses.push_back(k);  // Record the press event
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="Rising Edge" icon="arrow-up">
+    Detected when key transitions from 0 → 1
+  </Card>
+  <Card title="Held Key" icon="hand">
+    Does not generate additional events in the queue
+  </Card>
+</CardGroup>
+
+This prevents the queue from filling up with duplicate events while a key is held.
+
+## Integration Example
+
+Here's how a frontend might integrate with the input system:
+
+```rust
+// SDL2 event loop example
+match event {
+    Event::KeyDown { keycode: Some(Keycode::Num1), .. } => {
+        chip8.key_down(0x1);
+    }
+    Event::KeyDown { keycode: Some(Keycode::Q), .. } => {
+        chip8.key_down(0x4);
+    }
+    Event::KeyUp { keycode: Some(Keycode::Num1), .. } => {
+        chip8.key_up(0x1);
+    }
+    Event::KeyUp { keycode: Some(Keycode::Q), .. } => {
+        chip8.key_up(0x4);
+    }
+    // ... map remaining 14 keys ...
+}
+```
+
+## Common Input Patterns
+
+<AccordionGroup>
+  <Accordion title="Polling Pattern">
+    Continuously check if a key is pressed:
+    
+    ```
+    loop:
+      LD V0, #5
+      SKP V0         ; Skip if key 5 pressed
+      JP loop        ; Keep checking
+      ; Key was pressed, continue
+    ```
+  </Accordion>
+  
+  <Accordion title="Wait Pattern">
+    Block until any key is pressed:
+    
+    ```
+    LD V0, K       ; Blocks until key press
+    ; V0 now contains the pressed key (0-F)
+    ```
+  </Accordion>
+  
+  <Accordion title="Menu Selection">
+    Wait for specific keys:
+    
+    ```
+    LD V0, K       ; Get key press
+    LD V1, #1
+    SE V0, V1      ; Check if key 1
+    JP option2
+    ; Handle option 1
+    
+    option2:
+    LD V1, #2
+    SE V0, V1      ; Check if key 2
+    JP option3
+    ; Handle option 2
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Initialization
+
+On emulator creation, the keypad is initialized to all zeros:
+
+```rust
+keypad: [0; 16],
+recent_presses: VecDeque::new(),
+```
+
+After reset, the keypad state is cleared:
+
+```rust
+pub fn reset_hard(&mut self) {
+    // ...
+    self.keypad.fill(0);
+    // Note: recent_presses is not explicitly cleared in reset
+}
+```
+
+## Key Value Range
+
+<Warning>
+Key values must be in the range 0-15 (0x0-0xF). Values outside this range will cause index out-of-bounds panics.
+</Warning>
+
+Frontends should validate key inputs:
+
+```rust
+if key_value <= 0xF {
+    chip8.key_down(key_value);
+}
+```
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Instruction Set" icon="code" href="/concepts/instruction-set">
+    See all input-related opcodes in detail
+  </Card>
+  <Card title="Architecture" icon="microchip" href="/concepts/chip8-architecture">
+    Learn how input fits into the execution cycle
+  </Card>
+</CardGroup>

@@ -1,0 +1,163 @@
+---
+title: 'CHIP-8 Architecture'
+description: 'Understanding the core architecture of the CHIP-8 emulator'
+---
+
+## Overview
+
+The CHIP-8 emulator is built around a central `Chip8` struct that contains all the components of a classic CHIP-8 virtual machine. This architecture follows the original CHIP-8 specification while being implemented in safe, modern Rust.
+
+## The Chip8 Struct
+
+The main emulator state is defined in `src/chip8.rs:18-39`:
+
+```rust
+pub struct Chip8 {
+    registers: [u8; 16],
+    memory: [u8; 4096],
+    index_register: u16,
+    program_counter: u16,
+    stack: [u16; 16],
+    stack_pointer: u8,
+    delay_timer: u8,
+    sound_timer: u8,
+    pub keypad: [u8; 16],
+    recent_presses: VecDeque<u8>,
+    pub video: [u32; 64 * 32],
+    op_code: u16,
+    table: [fn(&mut Chip8); 0xF+1],
+    table0: [fn(&mut Chip8); 0xE+1],
+    table8: [fn(&mut Chip8); 0xE+1],
+    tableE: [fn(&mut Chip8); 0xE+1],
+    tableF: [fn(&mut Chip8); 0x65+1],
+    debug_mode: bool,
+    last_opcode: u16,
+    rng_state: u32,
+}
+```
+
+## Core Components
+
+### Registers
+
+<Info>
+The CHIP-8 has 16 general-purpose 8-bit registers (V0-VF). Register VF is special and is used as a flag by some instructions.
+</Info>
+
+- **Type**: `[u8; 16]`
+- **Purpose**: Store temporary values during program execution
+- **Special**: `registers[0xF]` (VF) is used for carry, borrow, and collision detection
+
+### Memory
+
+- **Type**: `[u8; 4096]`
+- **Size**: 4KB (4,096 bytes)
+- **Layout**: See [Memory Layout](/concepts/memory-layout) for detailed information
+
+### Program Counter
+
+- **Type**: `u16`
+- **Initial Value**: `0x200` (512)
+- **Purpose**: Points to the current instruction in memory
+- **Behavior**: Incremented by 2 after each instruction (opcodes are 2 bytes)
+
+### Index Register
+
+- **Type**: `u16`
+- **Purpose**: Stores memory addresses for operations
+- **Usage**: Used by instructions that read/write memory, load sprites, etc.
+
+### Stack
+
+- **Type**: `[u16; 16]`
+- **Depth**: 16 levels
+- **Purpose**: Stores return addresses for subroutine calls
+- **Stack Pointer**: 8-bit value tracking the current stack position
+
+### Timers
+
+<CardGroup cols={2}>
+  <Card title="Delay Timer" icon="clock">
+    8-bit timer that counts down at 60Hz when non-zero. Used for timing game events.
+  </Card>
+  <Card title="Sound Timer" icon="volume">
+    8-bit timer that counts down at 60Hz. A beep plays while non-zero.
+  </Card>
+</CardGroup>
+
+## Function Pointer Tables
+
+The emulator uses function pointer tables for efficient opcode dispatch:
+
+```rust
+table: [fn(&mut Chip8); 0xF+1],    // Main dispatch table
+table0: [fn(&mut Chip8); 0xE+1],   // 0x0000-0x000F opcodes
+table8: [fn(&mut Chip8); 0xE+1],   // 0x8000-0x800F opcodes
+tableE: [fn(&mut Chip8); 0xE+1],   // 0xE000-0xE00F opcodes
+tableF: [fn(&mut Chip8); 0x65+1],  // 0xF000-0xF065 opcodes
+```
+
+<Note>
+This table-driven approach provides O(1) opcode lookup and avoids large switch statements.
+</Note>
+
+## Initialization
+
+When creating a new `Chip8` instance (`src/chip8.rs:77-106`):
+
+1. All registers are zeroed
+2. Memory is cleared
+3. Program counter is set to `0x200`
+4. Stack pointer is set to 0
+5. Timers are set to 0
+6. Fontset is loaded into memory at `0x50`
+7. Function pointer tables are initialized
+
+```rust
+let mut chip8 = Chip8::new();
+chip8.load_rom(path_to_rom)?;
+```
+
+## The Execution Cycle
+
+The main execution loop (`src/chip8.rs:1006-1030`) performs these steps:
+
+1. **Fetch**: Read opcode from memory at program counter
+2. **Increment**: Move program counter forward by 2
+3. **Decode & Execute**: Use function tables to execute the instruction
+4. **Update Timers**: Decrement delay and sound timers if non-zero
+
+```rust
+pub fn Cycle(&mut self) {
+    // Fetch opcode (big-endian)
+    self.op_code = ((self.memory[self.program_counter as usize] as u16) << 8) 
+                  | self.memory[(self.program_counter + 1) as usize] as u16;
+    
+    // Increment PC
+    self.program_counter += 2;
+    
+    // Decode and execute
+    self.table[(self.op_code & 0xF000) >> 12](self);
+    
+    // Decrement timers
+    if self.delay_timer > 0 { self.delay_timer -= 1; }
+    if self.sound_timer > 0 { self.sound_timer -= 1; }
+}
+```
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Memory Layout" icon="memory" href="/concepts/memory-layout">
+    Learn about the 4KB memory organization
+  </Card>
+  <Card title="Instruction Set" icon="code" href="/concepts/instruction-set">
+    Explore the 35+ opcodes available
+  </Card>
+  <Card title="Display System" icon="display" href="/concepts/display-system">
+    Understand the video rendering
+  </Card>
+  <Card title="Input Handling" icon="keyboard" href="/concepts/input-handling">
+    See how keyboard input works
+  </Card>
+</CardGroup>

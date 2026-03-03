@@ -1,0 +1,162 @@
+---
+title: 'Execution'
+description: 'Methods for executing CHIP-8 instructions and running the emulator'
+---
+
+## Cycle()
+
+Executes a single fetch-decode-execute cycle of the CHIP-8 virtual machine.
+
+**Signature:** `src/chip8.rs:1006-1030`
+
+```rust
+pub fn Cycle(&mut self)
+```
+
+### Description
+
+This is the core execution method that performs one complete instruction cycle. It should be called repeatedly in a loop to run a CHIP-8 program.
+
+### Execution Steps
+
+1. **Fetch**: Reads the 16-bit opcode from memory at the current `program_counter`
+   - CHIP-8 uses big-endian byte order
+   - Two consecutive bytes are combined into a single u16 opcode
+
+2. **Increment PC**: Advances the program counter by 2 bytes
+
+3. **Decode & Execute**: Uses the opcode dispatch tables to call the appropriate handler function
+   - Extracts the first nibble (0xF000) to index into the main `table`
+   - Some opcodes require further dispatching through sub-tables
+
+4. **Update Timers**: Decrements both delay_timer and sound_timer if they are greater than 0
+
+### Debug Output
+
+When `debug_mode` is enabled, prints the current opcode value to stderr:
+```
+Opcode: 8196
+```
+
+### Example
+
+```rust
+use chip8_rs::chip8::Chip8;
+use std::path::PathBuf;
+
+let mut chip8 = Chip8::new();
+chip8.load_rom(PathBuf::from("pong.ch8")).expect("Failed to load ROM");
+
+// Execute a single cycle
+chip8.Cycle();
+
+// Typical usage: run in a loop
+for _ in 0..1000 {
+    chip8.Cycle();
+}
+```
+
+<Note>
+The timers decrement once per cycle. For accurate timing, `Cycle()` should be called at approximately 500-700 Hz, while the display refresh should happen at 60 Hz.
+</Note>
+
+---
+
+## play()
+
+Runs the CHIP-8 emulator indefinitely with automatic display updates.
+
+**Signature:** `src/chip8.rs:119-127`
+
+```rust
+pub fn play(&mut self, speed: u64)
+```
+
+### Parameters
+
+<ParamField path="speed" type="u64" required>
+  The delay in milliseconds between each cycle. Controls the execution speed of the emulator.
+</ParamField>
+
+### Description
+
+This is a convenience method that runs an infinite loop, executing cycles and automatically printing the display to the terminal. It's equivalent to:
+
+```rust
+loop {
+    self.Cycle();
+    self.pretty_print_video();
+    thread::sleep(cycle_wait_time);
+}
+```
+
+### Behavior
+
+- Executes one `Cycle()` per iteration
+- Prints the current video buffer to the terminal using ANSI escape codes
+- Sleeps for the specified duration to control speed
+- **Never returns** - runs until the process is terminated
+
+### Example
+
+```rust
+use chip8_rs::chip8::Chip8;
+use std::path::PathBuf;
+
+let mut chip8 = Chip8::new();
+chip8.load_rom(PathBuf::from("space_invaders.ch8"))
+    .expect("Failed to load ROM");
+
+// Run at 30ms per cycle (approximately 33 Hz)
+chip8.play(30); // This never returns
+```
+
+### Speed Guidelines
+
+- **Faster**: 1-10ms - Very fast execution, good for testing
+- **Normal**: 10-30ms - Typical speed for most games
+- **Slower**: 50-100ms - Easier to observe individual operations
+
+<Warning>
+This method runs an infinite loop and never returns. Use `Cycle()` directly if you need more control over the execution loop or need to handle events between cycles.
+</Warning>
+
+---
+
+## last_opcode()
+
+Returns the most recently executed opcode.
+
+**Signature:** `src/chip8.rs:108`
+
+```rust
+pub fn last_opcode(&self) -> u16
+```
+
+### Returns
+
+<ResponseField name="opcode" type="u16">
+  The 16-bit opcode that was executed in the last `Cycle()` call. Returns 0 if no cycles have been executed yet.
+</ResponseField>
+
+### Description
+
+This method provides access to the `last_opcode` field, which is updated during each `Cycle()` execution. Useful for debugging, logging, or implementing step-by-step execution features.
+
+### Example
+
+```rust
+let mut chip8 = Chip8::new();
+chip8.load_rom(PathBuf::from("test.ch8")).expect("Failed to load");
+
+chip8.Cycle();
+let opcode = chip8.last_opcode();
+println!("Last executed opcode: 0x{:04X}", opcode);
+```
+
+### Use Cases
+
+- Debugging: Track which instruction caused an error
+- Logging: Record execution history
+- Testing: Verify correct opcode sequence
+- UI: Display current instruction in a debugger interface

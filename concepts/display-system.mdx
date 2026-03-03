@@ -1,0 +1,297 @@
+---
+title: 'Display System'
+description: 'Understanding the 64x32 monochrome display and sprite rendering'
+---
+
+## Overview
+
+The CHIP-8 features a 64x32 pixel monochrome display. Graphics are drawn by rendering 8-pixel-wide sprites stored in memory, using XOR logic for pixel manipulation.
+
+## Video Buffer
+
+The display is represented by a flat array of 32-bit color values:
+
+```rust
+pub video: [u32; 64 * 32]  // 2,048 pixels
+```
+
+### Pixel Format
+
+- **On (white)**: `0xFFFFFFFF`
+- **Off (black)**: `0x00000000`
+
+<Info>
+While CHIP-8 is monochrome, the implementation uses 32-bit RGBA values for compatibility with modern graphics systems.
+</Info>
+
+## Display Dimensions
+
+```rust
+const VIDEO_WIDTH: u8 = 64;
+const VIDEO_HEIGHT: u8 = 32;
+```
+
+- **Resolution**: 64 × 32 pixels
+- **Total pixels**: 2,048
+- **Aspect ratio**: 2:1
+- **Color depth**: Monochrome (1-bit per pixel conceptually)
+
+## Sprite Rendering
+
+Sprites are drawn using the `Dxyn` instruction (`src/chip8.rs:729-777`). This is the only drawing instruction in CHIP-8.
+
+### Drawing Algorithm
+
+```rust
+fn OP_Dxyn(&mut self) {
+    let Vx = (self.op_code & 0x0F00) >> 8;
+    let Vy = (self.op_code & 0x00F0) >> 4;
+    let height = self.op_code & 0x000F;
+    
+    // Wrap coordinates if they exceed screen bounds
+    let x_pos = self.registers[Vx as usize] % 64;
+    let y_pos = self.registers[Vy as usize] % 32;
+    
+    self.registers[0xF] = 0;  // Reset collision flag
+    
+    for row in 0..height {
+        let sprite_byte = self.memory[(self.index_register + row) as usize];
+        
+        for col in 0..8 {
+            let sprite_pixel = sprite_byte & (0x80 >> col);
+            let video_index = ((y_pos as u16 + row) * 64 
+                             + x_pos as u16 + col) as usize;
+            
+            if sprite_pixel != 0 {
+                // Collision detection
+                if self.video[video_index] == 0xFFFFFFFF {
+                    self.registers[0xF] = 1;
+                }
+                
+                // XOR pixel with sprite data
+                self.video[video_index] ^= 0xFFFFFFFF;
+            }
+        }
+    }
+}
+```
+
+### Sprite Characteristics
+
+<CardGroup cols={2}>
+  <Card title="Width" icon="arrows-left-right">
+    Always 8 pixels wide
+  </Card>
+  <Card title="Height" icon="arrows-up-down">
+    Variable: 1-15 pixels tall (specified in opcode)
+  </Card>
+  <Card title="Storage" icon="memory">
+    Located in memory at address stored in I register
+  </Card>
+  <Card title="Format" icon="border-all">
+    1 byte per row, each bit represents a pixel
+  </Card>
+</CardGroup>
+
+## XOR Drawing
+
+The key feature of CHIP-8 graphics is XOR-based rendering:
+
+```rust
+self.video[video_index] ^= 0xFFFFFFFF;
+```
+
+### Why XOR?
+
+<Steps>
+  <Step title="Draw sprite">
+    XORing with 0xFFFFFFFF turns off pixels (0x00000000) into on pixels (0xFFFFFFFF)
+  </Step>
+  <Step title="Erase sprite">
+    Drawing the same sprite again XORs the pixels back to their original state
+  </Step>
+  <Step title="Collision detection">
+    If a pixel is already on when trying to turn it on, VF is set to 1
+  </Step>
+</Steps>
+
+<CodeGroup>
+```rust XOR Truth Table
+// Pixel states
+0x00000000 ^ 0xFFFFFFFF = 0xFFFFFFFF  // Off → On
+0xFFFFFFFF ^ 0xFFFFFFFF = 0x00000000  // On → Off
+```
+
+```rust Example
+// Draw sprite (turns pixels on)
+video[100] = 0x00000000;  // Initially off
+video[100] ^= 0xFFFFFFFF; // Now on (0xFFFFFFFF)
+
+// Draw same sprite again (erases it)
+video[100] ^= 0xFFFFFFFF; // Back to off (0x00000000)
+```
+</CodeGroup>
+
+## Collision Detection
+
+The VF register acts as a collision flag:
+
+```rust
+if self.video[video_index] == 0xFFFFFFFF {
+    self.registers[0xF] = 1;  // Collision detected
+}
+```
+
+<Warning>
+VF is set to 1 if ANY pixel was erased during the draw operation. It's set to 0 at the start of each draw.
+</Warning>
+
+This is commonly used for:
+- Collision detection in games
+- Detecting when sprites overlap
+- Implementing game physics
+
+## Screen Wrapping
+
+Coordinates are wrapped using modulo:
+
+```rust
+let x_pos = self.registers[Vx as usize] % 64;
+let y_pos = self.registers[Vy as usize] % 32;
+```
+
+- X coordinates > 63 wrap to the left edge
+- Y coordinates > 31 wrap to the top edge
+
+## Clear Screen
+
+The `00E0` instruction clears the entire display:
+
+```rust
+// src/chip8.rs:377-383
+pub fn OP_00E0(&mut self) {
+    self.video = [0; 2048];  // Set all pixels to black
+}
+```
+
+## Rendering to Terminal
+
+The emulator includes a terminal-based renderer (`src/chip8.rs:281-304`):
+
+```rust
+pub fn pretty_print_video(&mut self) {
+    print!("\x1B[2J\x1B[1;1H");  // Clear terminal
+    
+    let mut new_vec = self.video.iter().peekable();
+    let mut rows: Vec<Vec<_>> = vec![];
+    
+    // Split into 64-pixel rows
+    while new_vec.peek().is_some() {
+        let chunk: Vec<_> = new_vec.by_ref().take(64).collect();
+        rows.push(chunk);
+    }
+    
+    for row in rows {
+        let mut current_row = "".to_string();
+        
+        for pixel in row {
+            if pixel == &0xFFFFFFFF {
+                current_row.push('█');  // White pixel
+            } else {
+                current_row.push(' ');  // Black pixel
+            }
+        }
+        println!("{}", current_row);
+    }
+}
+```
+
+## Sprite Data Format
+
+Sprites are stored as consecutive bytes in memory. Each byte represents one row of 8 pixels:
+
+```rust
+// Example: Letter 'F' sprite (5 bytes tall)
+[
+    0xF0,  // 11110000 → ████
+    0x80,  // 10000000 → █
+    0xF0,  // 11110000 → ████
+    0x80,  // 10000000 → █
+    0x80,  // 10000000 → █
+]
+```
+
+### Built-in Font Sprites
+
+The emulator includes hexadecimal digit sprites (0-F) stored at `0x50`-`0x9F`:
+
+```rust
+let fontset: [u8; 80] = [
+    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+    0x20, 0x60, 0x20, 0x20, 0x70, // 1
+    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+    // ... (digits 3-F)
+];
+```
+
+The `Fx29` instruction loads a font sprite location:
+
+```rust
+// Get sprite for digit in V5
+self.index_register = 0x50 + (5 * self.registers[5]);
+// Now can draw the digit with Dxyn
+```
+
+## Video Buffer Access
+
+The video buffer is public and can be accessed directly:
+
+```rust
+pub fn export_video(&mut self) -> &[u32; 64 * 32] {
+    &self.video
+}
+```
+
+This allows external rendering systems to read pixel data for display on modern graphics APIs (SDL, WebGL, etc.).
+
+## Coordinate Calculation
+
+Pixel positions are calculated as:
+
+```rust
+let video_index = (y * 64 + x) as usize;
+```
+
+Example positions:
+- Top-left corner: `(0, 0)` → index `0`
+- Top-right corner: `(63, 0)` → index `63`
+- Bottom-left corner: `(0, 31)` → index `1984`
+- Bottom-right corner: `(63, 31)` → index `2047`
+
+## Performance Considerations
+
+<Note>
+The wrapping addition used in video index calculation prevents overflow:
+
+```rust
+let video_index = ((y_pos as u16).wrapping_add(row) * 64)
+    .wrapping_add(x_pos as u16)
+    .wrapping_add(col) as usize;
+```
+
+This ensures safe memory access even with extreme coordinate values.
+</Note>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Memory Layout" icon="memory" href="/concepts/memory-layout">
+    Learn where sprites are stored in memory
+  </Card>
+  <Card title="Instruction Set" icon="code" href="/concepts/instruction-set">
+    See all drawing-related instructions
+  </Card>
+  <Card title="Architecture" icon="microchip" href="/concepts/chip8-architecture">
+    Understand how video fits into the system
+  </Card>
+</CardGroup>

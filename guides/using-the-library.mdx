@@ -1,0 +1,199 @@
+---
+title: Using the Library
+description: How to integrate CHIP8-rs into your Rust project
+---
+
+This guide shows you how to use CHIP8-rs as a library in your own Rust applications.
+
+## Adding to Your Project
+
+Add CHIP8-rs to your `Cargo.toml`:
+
+```toml Cargo.toml
+[dependencies]
+chip8-rs = "0.1.0"
+```
+
+For CLI features (ratatui-based terminal UI):
+
+```toml Cargo.toml
+[dependencies]
+chip8-rs = { version = "0.1.0", features = ["cli"] }
+```
+
+For web/WASM features:
+
+```toml Cargo.toml
+[dependencies]
+chip8-rs = { version = "0.1.0", features = ["web"] }
+```
+
+## Basic Usage
+
+The core workflow involves creating a `Chip8` instance, loading a ROM, and running the emulation loop.
+
+<Steps>
+  <Step title="Import the library">
+    ```rust
+    use chip8_rs::chip8::Chip8;
+    use std::path::PathBuf;
+    use std::{thread, time};
+    ```
+  </Step>
+
+  <Step title="Create a new emulator instance">
+    ```rust
+    let mut chip8: Chip8 = Chip8::new();
+    ```
+
+    This initializes:
+    - All registers to zero
+    - Memory/ROM to zero
+    - Program counter to `0x200` (standard CHIP-8 start address)
+    - Stack pointer to 0
+    - Video buffer to zero
+    - Loads the built-in fontset into memory
+  </Step>
+
+  <Step title="Load a ROM">
+    ```rust
+    let rom_path = PathBuf::from("path/to/rom.ch8");
+    chip8.load_rom(rom_path).expect("Failed to load ROM");
+    ```
+
+    See the [Loading ROMs](/guides/loading-roms) guide for more details.
+  </Step>
+
+  <Step title="Run the emulation loop">
+    ```rust
+    let speed: u64 = 10; // milliseconds per cycle
+    
+    loop {
+        // Execute one instruction cycle
+        chip8.Cycle();
+        
+        // Handle input (set chip8.keypad array)
+        // ...
+        
+        // Render the display (read chip8.video buffer)
+        // ...
+        
+        // Control clock speed
+        thread::sleep(time::Duration::from_millis(speed));
+    }
+    ```
+  </Step>
+</Steps>
+
+## Complete Example
+
+Here's a minimal example that runs the emulator:
+
+```rust
+use chip8_rs::chip8::Chip8;
+use std::path::PathBuf;
+use std::{thread, time};
+
+fn main() {
+    let mut chip8: Chip8 = Chip8::new();
+    
+    let rom = PathBuf::from("roms/test_opcode.ch8");
+    chip8.load_rom(rom).expect("Failed to load ROM");
+    
+    let speed: u64 = 10; // 10ms per cycle = ~100 Hz
+    
+    loop {
+        chip8.Cycle();
+        chip8.pretty_print_video(); // Terminal output
+        thread::sleep(time::Duration::from_millis(speed));
+    }
+}
+```
+
+## Using the Built-in Play Method
+
+For simple use cases, you can use the `play()` method which runs the emulator with a built-in loop:
+
+```rust
+let mut chip8 = Chip8::new();
+chip8.load_rom(PathBuf::from("rom.ch8")).unwrap();
+
+// This runs forever with the specified speed (ms per cycle)
+chip8.play(10);
+```
+
+This is equivalent to:
+
+```rust
+loop {
+    chip8.Cycle();
+    chip8.pretty_print_video();
+    thread::sleep(time::Duration::from_millis(10));
+}
+```
+
+## Accessing Display Data
+
+The video buffer is a public field containing 64×32 pixels:
+
+```rust
+let video: [u32; 64 * 32] = chip8.video;
+
+// Each pixel is either 0 (off) or 0xFFFFFFFF (on)
+for y in 0..32 {
+    for x in 0..64 {
+        let pixel = video[y * 64 + x];
+        if pixel != 0 {
+            // Draw white pixel
+        } else {
+            // Draw black pixel
+        }
+    }
+}
+```
+
+You can also use the `export_video()` method:
+
+```rust
+let video_ref: &[u32; 64 * 32] = chip8.export_video();
+```
+
+## Handling Input
+
+The emulator exposes a keypad array that you should update based on user input:
+
+```rust
+// The CHIP-8 has a 16-key hexadecimal keypad (0-F)
+chip8.keypad = [0u8; 16];
+
+// Set key 0x5 as pressed
+chip8.keypad[0x5] = 1;
+
+// Or use the key_down/key_up methods
+chip8.key_down(0x5);
+chip8.key_up(0x5);
+
+// Check if a key is pressed
+if chip8.is_key_down(0x5) {
+    println!("Key 5 is pressed");
+}
+```
+
+See [CLI Usage](/guides/cli-usage) for the standard keyboard mapping.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Loading ROMs" icon="file" href="/guides/loading-roms">
+    Learn different methods to load ROM files
+  </Card>
+  <Card title="Debug Mode" icon="bug" href="/guides/debug-mode">
+    Enable debug logging to trace execution
+  </Card>
+  <Card title="CLI Usage" icon="terminal" href="/guides/cli-usage">
+    Run the emulator from the command line
+  </Card>
+  <Card title="Web Integration" icon="globe" href="/guides/web-integration">
+    Use CHIP8-rs in the browser with WASM
+  </Card>
+</CardGroup>

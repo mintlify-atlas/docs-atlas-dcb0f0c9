@@ -1,0 +1,176 @@
+---
+title: 'Initialization'
+description: 'Methods for creating and initializing a CHIP-8 emulator instance'
+---
+
+## new()
+
+Creates a new CHIP-8 instance with all fields initialized to their starting values.
+
+**Signature:** `src/chip8.rs:77-106`
+
+```rust
+pub fn new() -> Self
+```
+
+### Returns
+
+<ResponseField name="Chip8" type="Chip8">
+  A fully initialized Chip8 instance ready to load and execute ROMs.
+</ResponseField>
+
+### Initial Values
+
+The `new()` constructor initializes the Chip8 struct with the following values:
+
+- `registers`: All zeroes (16 registers)
+- `memory`: All zeroes (4096 bytes)
+- `index_register`: 0
+- `program_counter`: 0x200 (start of program memory)
+- `stack`: All zeroes (16 slots)
+- `stack_pointer`: 0
+- `delay_timer`: 0
+- `sound_timer`: 0
+- `keypad`: All zeroes (16 keys)
+- `recent_presses`: Empty queue
+- `video`: All zeroes (64×32 pixels)
+- `op_code`: 0
+- `table`, `table0`, `table8`, `tableE`, `tableF`: Initialized via `add_table()`
+- `debug_mode`: false
+- `last_opcode`: 0
+- `rng_state`: 77
+
+### Behavior
+
+After initializing all fields, `new()` automatically calls:
+1. `load_fonts()` - Loads the hexadecimal font sprites into memory at address 0x50
+2. `add_table()` - Initializes the opcode dispatch tables
+
+### Example
+
+```rust
+use chip8_rs::chip8::Chip8;
+use std::path::PathBuf;
+use std::{thread, time};
+
+let mut chip8 = Chip8::new();
+
+// Load a ROM
+let rom_path = PathBuf::from("path/to/rom.ch8");
+chip8.load_rom(rom_path).expect("Failed to load ROM");
+
+// Execution loop
+let speed: u64 = 30; // milliseconds per cycle
+
+loop {
+    chip8.Cycle();
+    chip8.pretty_print_video();
+    thread::sleep(time::Duration::from_millis(speed));
+}
+```
+
+---
+
+## load_fonts()
+
+Loads the CHIP-8 hexadecimal font sprites into memory.
+
+**Signature:** `src/chip8.rs:307-340`
+
+```rust
+fn load_fonts(&mut self)
+```
+
+### Description
+
+This private method loads the built-in 80-byte fontset into memory starting at address 0x50. The fontset contains 5-byte sprite representations for hexadecimal digits 0-F.
+
+### Font Data Location
+
+- **Memory address**: 0x50 - 0x9F
+- **Size**: 80 bytes (16 characters × 5 bytes each)
+- **Characters**: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, A, B, C, D, E, F
+
+### Fontset Format
+
+Each character is represented by 5 bytes, where each byte represents a row of 8 pixels:
+
+```
+0xF0, 0x90, 0x90, 0x90, 0xF0  // 0
+0x20, 0x60, 0x20, 0x20, 0x70  // 1
+// ... etc
+```
+
+<Note>
+This method is called automatically by `new()` and should not need to be called manually.
+</Note>
+
+---
+
+## add_table()
+
+Initializes the opcode dispatch tables with function pointers.
+
+**Signature:** `src/chip8.rs:130-198`
+
+```rust
+pub fn add_table(&mut self)
+```
+
+### Description
+
+This method populates the five opcode dispatch tables (`table`, `table0`, `table8`, `tableE`, `tableF`) with function pointers to the appropriate opcode handler methods. This enables fast opcode dispatch during execution.
+
+### Dispatch Tables
+
+- **table**: Main dispatch based on first nibble (0x0-0xF)
+- **table0**: Handlers for 0x00E0 (clear screen) and 0x00EE (return)
+- **table8**: Arithmetic and logic operations (0x8XY0-0x8XYE)
+- **tableE**: Keyboard operations (0xEX9E and 0xEXA1)
+- **tableF**: Miscellaneous operations (timers, memory, BCD, etc.)
+
+### Debug Output
+
+If `debug_mode` is enabled, this method will print:
+```
+Loading tables
+Tables loaded
+```
+
+<Note>
+This method is called automatically by `new()` and should not need to be called manually unless you're implementing custom opcode handlers.
+</Note>
+
+---
+
+## debug()
+
+Toggles debug mode for the CHIP-8 instance.
+
+**Signature:** `src/chip8.rs:201-205`
+
+```rust
+pub fn debug(&mut self)
+```
+
+### Description
+
+Toggles the `debug_mode` flag. When debug mode is enabled, the emulator will output diagnostic information to stderr, including:
+- Opcode execution messages
+- Table loading messages
+- Font loading messages
+- Current opcode values
+
+### Example
+
+```rust
+let mut chip8 = Chip8::new();
+chip8.debug(); // Enables debug mode
+// Debug output will now be printed to stderr
+
+chip8.debug(); // Disables debug mode
+```
+
+<Warning>
+Debug mode significantly impacts performance due to stderr writes. Use only for development and debugging.
+</Warning>
